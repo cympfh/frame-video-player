@@ -22,7 +22,7 @@ import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
 import fvp_openvr as vr
-from fvp_controls import (ButtonGate, Edge, dpad_axis, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
+from fvp_controls import (ButtonGate, input_priority, Edge, dpad_axis, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
                           wrap_deg, yaw_step)  # noqa: E402
 
 log = logging.getLogger("fvp")
@@ -537,18 +537,20 @@ class App:
             self.osd_until = 0.0
             self.ov.hide(self.osd)
 
-    def stick_priority(self):
-        # During 360/180 playback ask SteamVR to keep the sticks for us (needs the user to turn on
-        # "Experimental overlay input overrides" in SteamVR developer settings; otherwise 0 behaves the same).
-        if self.settings.get("stick_exclusive_360", True) and self.mode != "flat" and not self.paused:
-            return vr.ACTION_SET_OVERLAY_GLOBAL_PRIORITY
-        return 0
+    def stick_priority(self, dash_visible):
+        # Overlay apps get NO controller input while the dashboard is closed (a scene app / home has focus):
+        # seen on the Frame 16:29-16:30, action states froze and only changed when the dashboard opened or
+        # closed. Global overlay priority fixes that, but SteamVR only honours it with
+        # /settings/steamvr/globalActionSetPriority on (Developer: "Enable global input from overlays").
+        # Ask for it whenever something is loaded and the dashboard is closed; with the dashboard open use 0
+        # so the dashboard keeps its own input.
+        return input_priority(self.item is not None, dash_visible, vr.ACTION_SET_OVERLAY_GLOBAL_PRIORITY)
 
     def pump_input(self, dt, dash_visible):
         """Sticks via SteamVR Input; the action set is active only while something is playing."""
         if self.input is None or self.item is None or self.settings_override.get("hidden"):
             return
-        st = self.input.update(self.stick_priority())
+        st = self.input.update(self.stick_priority(dash_visible))
         if st is None:
             return
         now = time.monotonic()

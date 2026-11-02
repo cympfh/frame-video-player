@@ -134,3 +134,8 @@ class ButtonGate:
             self.latched |= pressed
             return {n: False for n in self.names}
         return {n: (n in pressed and n not in self.latched) for n in self.names}
+
+
+def input_priority(loaded, dash_visible, global_priority):
+    """Action set priority: global overlay priority while a video is loaded and the dashboard is closed."""
+    return global_priority if loaded and not dash_visible else 0

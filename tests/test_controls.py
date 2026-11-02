@@ -182,6 +182,24 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.run_seq(seq), 0)
 
 
+class Priority(unittest.TestCase):
+    def test_global_only_while_loaded_and_dashboard_closed(self):
+        G = 0x01000000
+        self.assertEqual(c.input_priority(True, False, G), G)
+        self.assertEqual(c.input_priority(True, True, G), 0)
+        self.assertEqual(c.input_priority(False, False, G), 0)
+
+    def test_states_frozen_at_close_then_real_press(self):
+        """Frame log 16:29: back+play read pressed from dashboard close; a real press after release counts."""
+        g, e = c.ButtonGate(("seek_back", "seek_fwd", "play_pause")), c.Edge()
+        stuck = {"seek_back": True, "play_pause": True}
+        hits = 0
+        for st, dash, t in [({}, True, 0.0), (stuck, False, 0.1), (stuck, False, 3.0), ({}, False, 3.1),
+                            ({"play_pause": True}, False, 3.2)]:
+            hits += e.feed(g.feed(st, dash, t)["play_pause"])
+        self.assertEqual(hits, 1)
+
+
 class OverlayVisibility(unittest.TestCase):
     def test_no_event_or_dashboard_path_toggles_pause(self):
         """Only the panel button, the bound action (through ButtonGate) and the control socket may pause."""
