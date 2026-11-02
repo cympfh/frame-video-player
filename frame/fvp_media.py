@@ -13,6 +13,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -197,6 +198,86 @@ def list_pc():
         items.append(Item("pc", p, "pc:" + p, pc_url(base, token, p)))
     log.info("PC video list: %d files", len(items))
     return items, url
+
+
+# ---------------------------------------------------------------- PC folders (any drive)
+
+_pc = {"base": None, "token": None}
+
+
+def _pc_get(kind, path=None, retry=True):
+    """GET /<kind>/<token>[/<path>] from the tray as JSON. Gets a token first, and a new one on 403."""
+    if not _pc["token"]:
+        _pc["base"], _pc["token"], _url = pc_video()
+        if _url:
+            _pc["url"] = _url
+    url = "%s/%s/%s" % (_pc["base"], kind, _pc["token"])
+    if path is not None:
+        url += "/" + urllib.parse.quote(path, safe="")
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 403 and retry:
+            _pc["token"] = None
+            return _pc_get(kind, path, False)
+        raise
+
+
+def pc_file_url(base, token, path):
+    return "%s/f/%s/%s" % (base, token, urllib.parse.quote(path, safe=""))
+
+
+def folder_name(path):
+    p = path.rstrip("/")
+    return p.rsplit("/", 1)[-1] if "/" in p else (p + "/" if p.endswith(":") else p or "/")
+
+
+def dir_item(title, path):
+    it = Item("pcdir", title, "dir:" + path, None)
+    it.path = path
+    return it
+
+
+def list_pc_dir(path):
+    """Contents of a PC folder ('' = top: the Videos folder and the drives). Returns (items, url, path).
+
+    Falls back to the old flat Videos list when the tray is too old for folders."""
+    try:
+        if not path:
+            d = _pc_get("drives")
+            items = []
+            if d.get("videos"):
+                items.append(dir_item("[ビデオ]  " + d["videos"], d["videos"]))
+            items += [dir_item("[ドライブ]  " + x, x) for x in d.get("drives", [])]
+        else:
+            d = _pc_get("dir", path)
+            path = d.get("path") or path
+            items = [dir_item("↑ 上のフォルダへ", d.get("parent") or "")]
+            items += [dir_item("[フォルダ]  " + n, path.rstrip("/") + "/" + n) for n in d.get("dirs", [])]
+            for f in d.get("files", []):
+                full = path.rstrip("/") + "/" + f["name"]
+                it = Item("pc", f["name"], "pc:" + full, pc_file_url(_pc["base"], _pc["token"], full))
+                it.path = full
+                items.append(it)
+    except urllib.error.HTTPError as e:
+        if e.code != 404 or path:
+            raise
+        items, url = list_pc()
+        return items, url, ""
+    log.info("PC folder %r: %d entries", path, len(items))
+    return items, _pc.pop("url", None), path
+
+
+def load_pc_folders():
+    return _load("pc-folders.json", [])
+
+
+def add_pc_folder(path, keep=10):
+    """Remember a PC folder for the quick-jump buttons: most recent first, at most `keep`."""
+    h = [path] + [p for p in load_pc_folders() if p != path]
+    _save("pc-folders.json", h[:keep])
+    return h[:keep]
 
 
 def pc_url(base, token, rel):
