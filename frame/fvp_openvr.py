@@ -68,6 +68,8 @@ EV_MOUSE_DOWN = 301
 EV_MOUSE_UP = 302
 EV_FOCUS_ENTER = 303
 EV_FOCUS_LEAVE = 304
+EV_SCROLL_DISCRETE = 305  # data is VREvent_Scroll_t: xdelta, ydelta at the same place as mouse x, y
+EV_SCROLL_SMOOTH = 309
 EV_OVERLAY_SHOWN = 500
 EV_OVERLAY_HIDDEN = 501
 EV_DASHBOARD_ACTIVATED = 502
@@ -89,6 +91,8 @@ INIT_ERRORS = {
 APP_OVERLAY = 2          # VRApplication_Overlay
 INPUT_MOUSE = 1          # VROverlayInputMethod_Mouse
 FLAG_ENABLE_CLICK_STABILIZATION = 1 << 27
+FLAG_SEND_DISCRETE_SCROLL = 1 << 6   # VROverlayFlags_SendVRDiscreteScrollEvents
+FLAG_SEND_SMOOTH_SCROLL = 1 << 17    # VROverlayFlags_SendVRSmoothScrollEvents
 
 EVENT_SIZE = 60          # sizeof(VREvent_t)(openvr_capi.h を gcc で測った値。pack(4))
 
@@ -411,3 +415,93 @@ class Overlay:
 class TrackedDevicePose(ctypes.Structure):
     _fields_ = [("m", ctypes.c_float * 12), ("vel", ctypes.c_float * 3), ("angvel", ctypes.c_float * 3),
                 ("result", ctypes.c_int), ("bPoseIsValid", ctypes.c_bool), ("bDeviceIsConnected", ctypes.c_bool)]
+
+
+# ---------------------------------------------------------------- SteamVR Input (IVRInput)
+# Only the first entries of VR_IVRInput_FnTable are used; their order is the same in IVRInput_010/011
+# (openvr_capi.h): SetActionManifestPath, GetActionSetHandle, GetActionHandle, GetInputSourceHandle,
+# UpdateActionState, GetDigitalActionData, GetAnalogActionData.
+INPUT_VERSIONS = ("IVRInput_010", "IVRInput_011")
+ACTION_SET_OVERLAY_GLOBAL_PRIORITY = 0x01000000  # k_nActionSetOverlayGlobalPriorityMin
+
+
+class ActiveActionSet(ctypes.Structure):
+    _pack_ = 4
+    _fields_ = [("ulActionSet", ctypes.c_uint64), ("ulRestrictedToDevice", ctypes.c_uint64),
+                ("ulSecondaryActionSet", ctypes.c_uint64), ("unPadding", ctypes.c_uint32),
+                ("nPriority", ctypes.c_int32)]
+
+
+class AnalogData(ctypes.Structure):
+    _pack_ = 4
+    _fields_ = [("bActive", ctypes.c_bool), ("activeOrigin", ctypes.c_uint64),
+                ("x", ctypes.c_float), ("y", ctypes.c_float), ("z", ctypes.c_float),
+                ("deltaX", ctypes.c_float), ("deltaY", ctypes.c_float), ("deltaZ", ctypes.c_float),
+                ("fUpdateTime", ctypes.c_float)]
+
+
+class DigitalData(ctypes.Structure):
+    _pack_ = 4
+    _fields_ = [("bActive", ctypes.c_bool), ("activeOrigin", ctypes.c_uint64),
+                ("bState", ctypes.c_bool), ("bChanged", ctypes.c_bool), ("fUpdateTime", ctypes.c_float)]
+
+
+assert ctypes.sizeof(ActiveActionSet) == 32 and ctypes.sizeof(AnalogData) == 40 and ctypes.sizeof(DigitalData) == 20
+
+
+class Input:
+    """Action-based controller input for this overlay app (SteamVR Input)."""
+
+    def __init__(self, overlay, manifest, set_name, analog, digital):
+        lib = overlay.lib
+        self.fn = None
+        for ver in INPUT_VERSIONS:
+            err = ctypes.c_int(0)
+            p = lib.VR_GetGenericInterface(("FnTable:" + ver).encode(), ctypes.byref(err))
+            if err.value == 0 and p:
+                self.version = ver
+                self.fn = (ctypes.c_void_p * 7).from_address(p)
+                break
+        if self.fn is None:
+            raise OpenVRError("IVRInput が使えません")
+        I, P, H = ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)
+        f = lambda i, *a: ctypes.CFUNCTYPE(I, *a)(self.fn[i])  # noqa: E731
+        self._manifest = f(0, P)
+        self._set = f(1, P, H)
+        self._action = f(2, P, H)
+        self._update = f(4, ctypes.POINTER(ActiveActionSet), ctypes.c_uint32, ctypes.c_uint32)
+        self._digital = f(5, ctypes.c_uint64, ctypes.POINTER(DigitalData), ctypes.c_uint32, ctypes.c_uint64)
+        self._analog = f(6, ctypes.c_uint64, ctypes.POINTER(AnalogData), ctypes.c_uint32, ctypes.c_uint64)
+        e = self._manifest(manifest.encode())
+        if e:
+            raise OpenVRError("SetActionManifestPath: EVRInputError %d" % e, e)
+        h = ctypes.c_uint64(0)
+        e = self._set(set_name.encode(), ctypes.byref(h))
+        if e:
+            raise OpenVRError("GetActionSetHandle: EVRInputError %d" % e, e)
+        self.set_handle = h.value
+        self.handles = {}
+        for name in list(analog) + list(digital):
+            h = ctypes.c_uint64(0)
+            e = self._action(("%s/in/%s" % (set_name, name)).encode(), ctypes.byref(h))
+            if e:
+                raise OpenVRError("GetActionHandle %s: EVRInputError %d" % (name, e), e)
+            self.handles[name] = h.value
+        self.analog, self.digital = tuple(analog), tuple(digital)
+
+    def update(self, priority=0):
+        """Activate our action set for this frame and read every action. Returns a dict, or None on error."""
+        s = ActiveActionSet(self.set_handle, 0, 0, 0, int(priority))
+        e = self._update(ctypes.byref(s), ctypes.sizeof(s), 1)
+        if e:
+            return None
+        out = {}
+        for n in self.analog:
+            d = AnalogData()
+            self._analog(self.handles[n], ctypes.byref(d), ctypes.sizeof(d), 0)
+            out[n] = (d.x, d.y) if d.bActive else (0.0, 0.0)
+        for n in self.digital:
+            d = DigitalData()
+            self._digital(self.handles[n], ctypes.byref(d), ctypes.sizeof(d), 0)
+            out[n] = bool(d.bActive and d.bState)
+        return out

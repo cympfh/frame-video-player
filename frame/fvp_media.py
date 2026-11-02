@@ -25,6 +25,7 @@ VIDEO_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".ts", ".m2ts", "
 SUB_EXTS = (".srt", ".ass", ".vtt")
 
 FLAT_MAX = (1920, 1080)
+AUDIO_BUFFER_MS = 100  # pulse buffer: small, so pause and volume feel immediate
 CUBE_FACE = int(os.environ.get("FVP_CUBE_FACE", "720"))
 
 _SECRET_RE = re.compile(r"(/(?:v|list)/)[0-9a-f]{16,}")
@@ -274,35 +275,80 @@ def video_filter(item, mode, sub_on):
     return ",".join(f), w, h
 
 
+def stream_fps(info):
+    """Frame rate of the first video stream (avg, then r_frame_rate), clamped to 10..60; 30 if unknown."""
+    for st in (info or {}).get("streams", []):
+        if st.get("codec_type") != "video":
+            continue
+        for k in ("avg_frame_rate", "r_frame_rate"):
+            try:
+                a, b = (st.get(k) or "0/0").split("/")
+                if float(b) > 0 and float(a) > 0:
+                    return min(60.0, max(10.0, float(a) / float(b)))
+            except ValueError:
+                pass
+    return 30.0
+
+
+class Clock:
+    """Wall clock that can be paused. now() = seconds played since start."""
+
+    def __init__(self, t=time.monotonic):
+        self.t = t
+        self.t0 = t()
+        self.paused_at = None
+        self.paused_total = 0.0
+
+    def now(self):
+        end = self.paused_at if self.paused_at is not None else self.t()
+        return end - self.t0 - self.paused_total
+
+    def pause(self):
+        if self.paused_at is None:
+            self.paused_at = self.t()
+
+    def resume(self):
+        if self.paused_at is not None:
+            self.paused_total += self.t() - self.paused_at
+            self.paused_at = None
+
+
 class Playback:
-    """Two ffmpeg processes started at `start` seconds. Frames come from a reader thread."""
+    """Two ffmpeg processes started at `start` seconds.
+
+    Video: ffmpeg writes constant-rate RGBA frames to a pipe as fast as it can; the reader thread paces
+    them against a pausable Clock, so ffmpeg is held back by the full pipe (no -re, no catch-up burst
+    after a pause). Audio: ffmpeg plays to pulse with a small buffer; pulse paces it. Pause = the reader
+    waits + SIGSTOP on the audio ffmpeg; resume = SIGCONT. Nothing is restarted, so it is immediate.
+    """
 
     def __init__(self, item, start, mode, volume, sub_on):
         self.item, self.start_pos, self.mode = item, max(0.0, start), mode
         vf, self.w, self.h = video_filter(item, mode, sub_on)
+        self.fps = stream_fps(item.info)
         self.frame_bytes = self.w * self.h * 4
         self.lock = threading.Lock()
-        self.buf = bytearray(self.frame_bytes)
         self.ready = None   # bytearray of the newest whole frame
         self.frames = 0
         self.eof = False
-        self.t0 = time.time()
+        self.stopped = False
+        self.clock = Clock()
+        self.running = threading.Event()
+        self.running.set()
         common = ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "warning"]
         net = ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] \
             if item.video.startswith("http") else []
-        vcmd = common + ["-threads", "0", "-ss", "%.3f" % self.start_pos, "-re"] + net + ["-i", item.video,
-                                                                                         "-an", "-sn", "-vf", vf,
-                                                                                         "-f", "rawvideo", "-"]
+        vcmd = common + ["-threads", "0", "-ss", "%.3f" % self.start_pos] + net + [
+            "-i", item.video, "-an", "-sn", "-vf", vf, "-r", "%.3f" % self.fps, "-f", "rawvideo", "-"]
         log.info("video ffmpeg: %s", redact(" ".join(vcmd)))
         self.vproc = subprocess.Popen(vcmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         self.aproc = None
         if item.has_audio:
             anet = ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] \
                 if item.audio.startswith("http") else []
-            acmd = common + ["-ss", "%.3f" % self.start_pos, "-re"] + anet + ["-i", item.audio, "-vn", "-sn",
-                                                                               "-af", "volume=%.2f" % volume,
-                                                                               "-f", "pulse", "-name",
-                                                                               "frame-video-player", "fvp"]
+            acmd = common + ["-ss", "%.3f" % self.start_pos] + anet + [
+                "-i", item.audio, "-vn", "-sn", "-af", "volume=%.2f" % volume,
+                "-f", "pulse", "-buffer_duration", str(AUDIO_BUFFER_MS), "-name", "frame-video-player", "fvp"]
             log.info("audio ffmpeg: %s", redact(" ".join(acmd)))
             self.aproc = subprocess.Popen(acmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                           start_new_session=True)
@@ -317,7 +363,8 @@ class Playback:
 
     def _read(self):
         f = self.vproc.stdout
-        while True:
+        n = 0
+        while not self.stopped:
             buf = bytearray(self.frame_bytes)
             mv = memoryview(buf)
             got = 0
@@ -328,6 +375,16 @@ class Playback:
                 got += r
             if got < self.frame_bytes:
                 break
+            # wait for this frame's time (and while paused)
+            while not self.stopped:
+                self.running.wait(0.2)
+                if not self.running.is_set():
+                    continue
+                late = self.clock.now() - n / self.fps
+                if late >= 0:
+                    break
+                time.sleep(min(-late, 0.05))
+            n += 1
             with self.lock:
                 self.ready = buf
                 self.frames += 1
@@ -340,21 +397,45 @@ class Playback:
         return b
 
     def position(self):
-        return self.start_pos + (time.time() - self.t0)
+        return self.start_pos + self.clock.now()
+
+    def _signal(self, sig):
+        if self.aproc and self.aproc.poll() is None:
+            try:
+                os.killpg(self.aproc.pid, sig)
+            except OSError:
+                pass
+
+    def pause(self):
+        self.running.clear()
+        self.clock.pause()
+        self._signal(signal.SIGSTOP)
+
+    def resume(self):
+        self._signal(signal.SIGCONT)
+        self.clock.resume()
+        self.running.set()
 
     def stop(self):
-        for p in (self.vproc, self.aproc):
-            if p and p.poll() is None:
+        """Kill both ffmpeg at once and reap them in the background (never blocks the UI)."""
+        self.stopped = True
+        self.running.set()
+        procs = [p for p in (self.vproc, self.aproc) if p]
+        for p in procs:
+            if p.poll() is None:
                 try:
-                    os.killpg(p.pid, signal.SIGTERM)
+                    os.killpg(p.pid, signal.SIGCONT)
+                    os.killpg(p.pid, signal.SIGKILL)
                 except OSError:
                     pass
-        for p in (self.vproc, self.aproc):
-            if p:
+
+        def reap():
+            for p in procs:
                 try:
-                    p.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    os.killpg(p.pid, signal.SIGKILL)
+                    p.wait(timeout=5)
+                except Exception:
+                    pass
+        threading.Thread(target=reap, daemon=True).start()
 
 
 # ---------------------------------------------------------------- persistence

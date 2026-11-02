@@ -252,6 +252,17 @@ class Canvas:
         out[3::4] = a
         return out
 
+    def save(self):
+        self.c.cairo_save(self.cr)
+
+    def restore(self):
+        self.c.cairo_restore(self.cr)
+
+    def clip(self, x, y, w, h):
+        self.c.cairo_new_path(self.cr)
+        self.c.cairo_rectangle(self.cr, x, y, w, h)
+        self.c.cairo_clip(self.cr)
+
     def save_png(self, path):
         self.c.cairo_surface_flush(self.surf)
         return self.c.cairo_surface_write_to_png(self.surf, path.encode()) == 0

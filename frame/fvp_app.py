@@ -21,10 +21,14 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
-import fvp_openvr as vr  # noqa: E402
+import fvp_openvr as vr
+from fvp_controls import (Edge, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
+                          wrap_deg, yaw_step)  # noqa: E402
 
 log = logging.getLogger("fvp")
 KEY = "cympfh.frame-video-player"
+HERE = os.path.dirname(os.path.realpath(__file__))
+OSD_W, OSD_H = 600, 100
 NAME = "動画プレイヤー"
 W, H = 1200, 800
 PANEL_M = 1.6
@@ -79,9 +83,20 @@ def screen_matrix(pose, distance):
     return _mat(r, [0, 1, 0], [-f[0], -f[1], -f[2]], t)
 
 
-def cube_matrices(pose):
-    """One matrix per cube face (FACES order). Each face looks back at the head."""
+def turn(f, r, yaw_deg):
+    """Turn the floor-plane frame (forward, right) so that the content on the right comes to the front
+    for positive yaw (what the user expects when pushing the stick right)."""
+    a = math.radians(yaw_deg)
+    c, s = math.cos(a), math.sin(a)
+    f2 = [c * f[i] - s * r[i] for i in range(3)]
+    r2 = [c * r[i] + s * f[i] for i in range(3)]
+    return f2, r2
+
+
+def cube_matrices(pose, yaw=0.0):
+    """One matrix per cube face (FACES order). Each face looks back at the head. yaw turns the cube."""
     pos, f, r = head_frame(pose)
+    f, r = turn(f, r, yaw)
     u = [0.0, 1.0, 0.0]
     neg = lambda v: [-v[0], -v[1], -v[2]]  # noqa: E731
     faces = {
@@ -105,7 +120,7 @@ class Panel:
     def __init__(self):
         self.tab = "frame"
         self.items = []
-        self.scroll = 0
+        self.scroll = 0.0  # in rows; fractional while the stick scrolls smoothly
         self.status = ""
         self.hover = None
         self.buttons = []
@@ -130,6 +145,8 @@ class Panel:
         for k, label in TABS:
             btn("tab:" + k, x, 14, 230, 56, label, on=self.tab == k)
             x += 245
+        btn("sticks", 930, 88, 240, 52, "スティック操作: " + ("入" if app.settings.get("sticks", True) else "切"),
+            on=app.settings.get("sticks", True), size=22)
         # list
         top = 88
         if self.tab == "youtube":
@@ -141,12 +158,16 @@ class Panel:
             where = {"frame": "Frame の ~/Videos", "pc": "PC の「ビデオ」フォルダ"}[self.tab]
             cv.text(where, 270, top + 35, 22, "#94a3b8")
             top += 62
-        rows = ROWS - (1 if self.tab == "youtube" else 1)
+        rows = self.rows()
         rh = 46
-        vis = self.items[self.scroll:self.scroll + rows]
-        for i, it in enumerate(vis):
-            y = top + i * (rh + 4)
-            key = "item:%d" % (self.scroll + i)
+        self.scroll = scroll_clamp(self.scroll, len(self.items), rows)
+        first = int(self.scroll)
+        off = (self.scroll - first) * (rh + 4)
+        cv.save()
+        cv.clip(30, top, 1040, rows * (rh + 4) - 4)
+        for i, it in enumerate(self.items[first:first + rows + 1]):
+            y = top + i * (rh + 4) - off
+            key = "item:%d" % (first + i)
             cur = app.item is not None and app.item.key == it.key
             col = "#1e3a5f" if cur else ("#273449" if self.hover == key else "#1a2332")
             cv.rrect(30, y, 1040, rh, 8, col)
@@ -161,11 +182,18 @@ class Panel:
                 label = label[:-1] + "…"
             cv.text(label, 46, y + 31, 22, "#f1f5f9")
             cv.text(mark, 1056, y + 31, 18, "#93c5fd", align="right")
-            self.buttons.append((key, 30, y, 1040, rh))
+            y0c, y1c = max(y, top), min(y + rh, top + rows * (rh + 4) - 4)
+            if y1c > y0c:
+                self.buttons.append((key, 30, y0c, 1040, y1c - y0c))
+        cv.restore()
         if not self.items:
             cv.text("ここに動画が出ます", 46, top + 40, 22, "#64748b")
         btn("up", 1084, top, 86, 140, "▲", enabled=self.scroll > 0)
         btn("down", 1084, top + rows * (rh + 4) - 144, 86, 140, "▼", enabled=self.scroll + rows < len(self.items))
+        if len(self.items) > rows:  # scroll position bar
+            span = rows * (rh + 4) - 4 - 2 * 144 - 16
+            frac = self.scroll / float(len(self.items) - rows)
+            cv.rrect(1121, top + 152 + frac * max(0, span - 20), 6, 20, 3, "#64748b")
         # now playing
         y0 = 500
         it = app.item
@@ -209,6 +237,14 @@ class Panel:
         cv.text(app.status[:80], 30, H - 22, 22, "#fbbf24" if app.status_warn else "#94a3b8")
         return cv
 
+    def rows(self):
+        return ROWS - 1
+
+    def scroll_by(self, rows):
+        old = self.scroll
+        self.scroll = scroll_clamp(self.scroll + rows, len(self.items), self.rows())
+        return self.scroll != old
+
     def hit(self, x, y):
         for key, bx, by, bw, bh in reversed(self.buttons):
             if bx <= x <= bx + bw and by <= y <= by + bh:
@@ -249,6 +285,12 @@ class App:
         self.vsize = (0, 0)
         self.last_save = 0.0
         self.busy = False
+        self.held_url = None
+        self.yaw = 0.0
+        self.osd_until = 0.0
+        self.stick_seek = SeekRepeater()
+        self.stick_click = Edge()
+        self.last_scroll_ev = 0.0
         self.settings_override = {}
         self.main, self.thumb = ov.create_dashboard(KEY, NAME)
         ov.set_width(self.main, PANEL_M)
@@ -259,8 +301,19 @@ class App:
         self.ptex = ctx.new_texture(W, H)
         self.screen = ov.create(KEY + ".screen", NAME + " 画面")
         self.faces = [ov.create(KEY + ".cube." + n, NAME + " 360 " + n) for n in FACES]
-        for h in [self.screen] + self.faces:
+        self.osd = ov.create(KEY + ".osd", NAME + " OSD")
+        ov.set_width(self.osd, 0.36)
+        ov._f["SetOverlaySortOrder"](self.osd, 10)  # above the video
+        self.otex = ctx.new_texture(OSD_W, OSD_H)
+        for h in [self.screen] + self.faces + [self.osd]:
             ov.hide(h)
+        self.input = None
+        try:
+            self.input = vr.Input(ov, os.path.join(HERE, "input/actions.json"), "/actions/fvp",
+                                  ("right_stick", "left_stick"), ("left_click",))
+            log.info("SteamVR Input: %s", self.input.version)
+        except Exception as e:  # the panel still works without sticks
+            log.warning("SteamVR Input unavailable: %s", e)
         self.load_tab("frame")
 
     # ---- helpers
@@ -277,7 +330,8 @@ class App:
 
     def run_job(self, fn, done):
         if self.busy:
-            self.say("ほかの処理が終わるまで待ってください")
+            # tell the caller (its done() resets whatever "…しています" text it showed)
+            self.jobs.put((done, None, RuntimeError("ほかの処理が終わるまで待ってください")))
             return
         self.busy = True
 
@@ -329,9 +383,14 @@ class App:
 
         def done(r, e):
             if e:
+                if self.held_url:
+                    url, self.held_url = self.held_url, None
+                    self.open_youtube(url)
+                    return
                 self.say("PC につながりません: %s" % media.redact(e), True)
                 return
-            url = r[2]
+            url = r[2] or self.held_url
+            self.held_url = None
             if not url:
                 self.say("PC に URL がありません。トレイの「コピーした動画の URL を Frame で再生する」を先に選んでください", True)
                 return
@@ -375,6 +434,7 @@ class App:
     def start(self, it, pos=None):
         self.stop_playback(save=True)
         self.item = it
+        self.yaw = 0.0
         self.mode = it.projection
         if pos is None:
             r = self.resume.get(it.key, {}).get("pos", 0)
@@ -430,7 +490,7 @@ class App:
             ov.show(self.screen)
         else:
             ov.hide(self.screen)
-            for i, (h, m) in enumerate(zip(self.faces, cube_matrices(self.pose))):
+            for i, (h, m) in enumerate(zip(self.faces, cube_matrices(self.pose, self.yaw))):
                 if self.mode == "180" and FACES[i] == "back":
                     ov.hide(h)
                     continue
@@ -439,6 +499,74 @@ class App:
                 self.bounds(h, i / 6.0, (i + 1) / 6.0)
                 ov.show(h)
         log.info("placed: mode=%s pose=%s", self.mode, "ok" if self.pose else "none (default)")
+
+    def turn_view(self, d):
+        """Rotate the 360/180 cube by d degrees around the vertical axis (only the transforms change)."""
+        self.yaw = wrap_deg(self.yaw + d)
+        for i, (h, m) in enumerate(zip(self.faces, cube_matrices(self.pose, self.yaw))):
+            if not (self.mode == "180" and FACES[i] == "back"):
+                self.ov.set_transform_abs(h, m)
+
+    def show_osd(self, text, secs=1.2):
+        """A small label in front of the eyes (seek / pause feedback while the dashboard is closed)."""
+        cv = cairo.Canvas(OSD_W, OSD_H)
+        cv.rrect(0, 0, OSD_W, OSD_H, 24, "#0f141c", alpha=0.85)
+        cv.text(text, OSD_W / 2.0, OSD_H / 2.0 + 15, 42, "#ffffff", align="center", bold=True)
+        data = cv.rgba_bytes()
+        cv.close()
+        self.ctx.upload(self.otex, OSD_W, OSD_H, data)
+        self.bounds(self.osd)
+        self.ov.set_gl_texture(self.osd, self.otex)
+        self.ov.set_transform_hmd(self.osd, [1, 0, 0, 0, 0, 1, 0, -0.18, 0, 0, 1, -1.0])
+        self.ov.show(self.osd)
+        self.osd_until = time.monotonic() + secs
+
+    def pump_osd(self):
+        if self.osd_until and time.monotonic() > self.osd_until:
+            self.osd_until = 0.0
+            self.ov.hide(self.osd)
+
+    def stick_priority(self):
+        # During 360/180 playback ask SteamVR to keep the sticks for us (needs the user to turn on
+        # "Experimental overlay input overrides" in SteamVR developer settings; otherwise 0 behaves the same).
+        if self.settings.get("stick_exclusive_360", True) and self.mode != "flat" and not self.paused:
+            return vr.ACTION_SET_OVERLAY_GLOBAL_PRIORITY
+        return 0
+
+    def pump_input(self, dt, dash_visible):
+        """Sticks via SteamVR Input; the action set is active only while something is playing."""
+        if self.input is None or self.item is None or not self.settings.get("sticks", True) \
+                or self.settings_override.get("hidden"):
+            return
+        st = self.input.update(self.stick_priority())
+        if st is None:
+            return
+        now = time.monotonic()
+        rx, ry = st["right_stick"]
+        if self.mode != "flat":
+            d = yaw_step(rx, dt, self.settings.get("turn_speed", 90.0))
+            if d:
+                self.turn_view(d)
+        if dash_visible and now - self.last_scroll_ev > 0.5:
+            # the dashboard sends scroll events only while the laser points at the panel; fill in otherwise
+            if self.panel.scroll_by(scroll_from_stick(ry, dt)):
+                self.dirty = True
+        lx, _ly = st["left_stick"]
+        step = self.stick_seek.feed(lx, now)
+        if step:
+            t0 = time.monotonic()
+            target = max(0.0, self.position() + step)
+            if self.item.duration:
+                target = min(target, self.item.duration - 1)
+            self.seek(target)
+            self.show_osd("%s%d秒 → %s" % ("+" if step > 0 else "−", abs(step), fmt_time(target)))
+            log.info("stick seek %+ds -> %s (%.0f ms)", step, fmt_time(target), (time.monotonic() - t0) * 1000)
+        if self.stick_click.feed(st["left_click"]):
+            t0 = time.monotonic()
+            self.toggle_pause()
+            self.show_osd("一時停止" if self.paused else "再生")
+            log.info("stick pause toggle -> %s (%.0f ms)", "paused" if self.paused else "playing",
+                     (time.monotonic() - t0) * 1000)
 
     def visible_video_overlays(self):
         if self.item is None:
@@ -452,11 +580,16 @@ class App:
             return
         if self.paused:
             self.paused = False
-            self.play_at(self.paused_pos)
+            if self.pb is not None:
+                self.pb.resume()  # SIGCONT + reader continues: immediate
+            else:
+                self.play_at(self.paused_pos)
             self.say("再生")
         else:
             self.paused_pos = self.position()
-            self.stop_playback(save=True)
+            if self.pb is not None:
+                self.pb.pause()   # reader waits + SIGSTOP on audio: immediate
+            self.remember(self.paused_pos)
             self.paused = True
             self.say("一時停止 %s" % fmt_time(self.paused_pos))
 
@@ -466,6 +599,9 @@ class App:
         pos = max(0.0, pos)
         if self.paused:
             self.paused_pos = pos
+            if self.pb is not None:
+                self.play_at(pos)
+                self.pb.pause()  # shows the new position as a still frame
             self.dirty = True
         else:
             self.play_at(pos)
@@ -504,18 +640,27 @@ class App:
         self.say("PC につなぎ直しています…")
 
         def done(r, e):
-            if e or self.item is not it:
+            if self.item is not it:
+                return  # the user switched to something else meanwhile
+            if e:
                 self.say("PC の動画を開けません: %s" % media.redact(e), True)
                 return
-            base, token, _url = r
+            base, token, url = r
+            if url:
+                self.held_url = url  # the tray hands a URL out once: keep it for 「PC から URL を受け取る」
             it.video = it.audio = media.pc_url(base, token, it.title)
             self.play_at(pos)
             self.say("再生中: %s" % it.title)
         self.run_job(media.pc_video, done)
 
     def restart_same(self):
-        if self.item is not None and not self.paused:
+        if self.item is None:
+            return
+        if not self.paused:
             self.play_at(self.position())
+        elif self.pb is not None:
+            self.play_at(self.position())
+            self.pb.pause()
 
     # ---- input
     def click(self, key, frac):
@@ -529,9 +674,9 @@ class App:
         elif key.startswith("item:"):
             self.open_index(int(key[5:]))
         elif key == "up":
-            self.panel.scroll = max(0, self.panel.scroll - (ROWS - 2))
+            self.panel.scroll_by(-(ROWS - 2))
         elif key == "down":
-            self.panel.scroll = min(max(0, len(self.panel.items) - 1), self.panel.scroll + (ROWS - 2))
+            self.panel.scroll_by(ROWS - 2)
         elif key == "seekbar" and self.item and self.item.duration:
             self.seek(frac * self.item.duration)
         elif key.startswith("seek:"):
@@ -565,7 +710,12 @@ class App:
             s["distance"] = round(min(15.0, max(0.6, s["distance"] + (0.5 if key == "dist:+" else -0.5))), 2)
             self.place()
         elif key == "recenter":
+            self.yaw = 0.0
             self.place()
+        elif key == "sticks":
+            s["sticks"] = not s.get("sticks", True)
+            self.say("スティック操作: " + ("入(左: 早送り・巻き戻し, 左押し込み: 一時停止, 右: 360° の向き)"
+                                         if s["sticks"] else "切(VRChat などの移動だけに使います)"))
         media.save_settings(s)
         self.dirty = True
 
@@ -614,6 +764,7 @@ class App:
             self.remember(self.pb.position())
 
     def draw_panel(self):
+        t0 = time.monotonic()
         cv = self.panel.draw(self)
         data = cv.rgba_bytes()
         cv.close()
@@ -623,10 +774,11 @@ class App:
         if e:
             log.warning("panel SetOverlayTexture: %s", self.ov.err_name(e))
         self.dirty = False
+        return (time.monotonic() - t0) * 1000
 
     def close(self):
         self.stop_playback(save=True)
-        for h in [self.screen] + self.faces + [self.main]:
+        for h in [self.screen] + self.faces + [self.osd, self.main]:
             try:
                 self.ov.destroy(h)
             except Exception:
@@ -753,14 +905,29 @@ def main():
     test = {"until": 0}
     code = 0
     last_tick = 0.0
+    ov.set_flag(app.main, vr.FLAG_SEND_SMOOTH_SCROLL, True)  # right stick over the panel -> EV_SCROLL_SMOOTH
+    down = None          # (key, x, y) at mouse down: taps survive a little pointer shake
+    pending_click = None  # monotonic time of the last click, for the latency log
+    stats = {"n": 0, "loop_max": 0.0, "draw_max": 0.0, "t": time.monotonic()}
+    prev = time.monotonic()
     try:
         while not stop["flag"]:
+            t_loop = time.monotonic()
+            dt, prev = min(0.1, t_loop - prev), t_loop
             for ev in ov.poll(app.main):
                 t = ev.eventType
                 if t == vr.EV_QUIT:
                     # only 700 (Quit) is for us; 701 (ProcessQuit) is sent when *any* OpenVR process exits
                     log.info("quit event from SteamVR")
                     stop["flag"] = True
+                elif t in (vr.EV_SCROLL_SMOOTH, vr.EV_SCROLL_DISCRETE):
+                    # VREvent_Scroll_t xdelta/ydelta share the place of the mouse x/y
+                    app.last_scroll_ev = time.monotonic()
+                    rows = scroll_from_smooth(ev.y) if t == vr.EV_SCROLL_SMOOTH else -ev.y * 2
+                    if app.settings.get("scroll_invert"):
+                        rows = -rows
+                    if app.panel.scroll_by(rows):
+                        app.dirty = True
                 elif t in (vr.EV_MOUSE_MOVE, vr.EV_MOUSE_DOWN, vr.EV_MOUSE_UP):
                     x, y = panel_xy(ev.x, ev.y, app.settings.get("flip", True))
                     key, frac = app.panel.hit(x, y)
@@ -768,17 +935,39 @@ def main():
                         if key != app.panel.hover:
                             app.panel.hover = key
                             app.dirty = True
-                    elif t == vr.EV_MOUSE_UP and ev.button == 1 and key:
-                        log.info("click %s", key)
-                        try:
-                            app.click(key, frac)
-                        except Exception:
-                            log.exception("click failed")
-                            app.say("エラーが起きました(ログを見てください)", True)
+                    elif t == vr.EV_MOUSE_DOWN and ev.button == 1:
+                        down = (key, x, y)
+                        if key and app.panel.hover != key:
+                            app.panel.hover = key  # immediate visual feedback
+                            app.dirty = True
+                    elif t == vr.EV_MOUSE_UP and ev.button == 1:
+                        key2 = resolve_tap(down, (key, x, y))
+                        if key2 and key2 != key:
+                            _k, frac = app.panel.hit(down[1], down[2])
+                        down = None
+                        if key2:
+                            pending_click = time.monotonic()
+                            try:
+                                app.click(key2, frac)
+                            except Exception:
+                                log.exception("click failed")
+                                app.say("エラーが起きました(ログを見てください)", True)
+                            app.dirty = True
+                            ms = app.draw_panel()  # redraw right away, before anything slow
+                            log.info("click %s: handled+drawn in %.0f ms (draw %.0f ms)", key2,
+                                     (time.monotonic() - pending_click) * 1000, ms)
                 elif t == vr.EV_FOCUS_LEAVE:
+                    down = None
                     if app.panel.hover:
                         app.panel.hover = None
                         app.dirty = True
+            dash = ov.dashboard_visible()
+            try:
+                app.pump_input(dt, dash)
+            except Exception:
+                log.exception("stick input failed")
+                app.input = None
+            app.pump_osd()
             for line in ctl.poll():
                 try:
                     handle_command(app, line, test)
@@ -799,11 +988,18 @@ def main():
             now = time.time()
             if now - last_tick > 1.0:
                 last_tick = now
-                if app.item is not None and ov.dashboard_visible():
+                if app.item is not None and dash and not app.paused:
                     app.dirty = True  # time display
             if app.dirty:
-                app.draw_panel()
-            time.sleep(0.005 if app.pb else 0.03)
+                stats["draw_max"] = max(stats["draw_max"], app.draw_panel())
+            el = (time.monotonic() - t_loop) * 1000
+            stats["n"] += 1
+            stats["loop_max"] = max(stats["loop_max"], el)
+            if time.monotonic() - stats["t"] > 60 and app.item is not None:
+                log.info("loop: %d iterations/60s, slowest %.0f ms, slowest panel draw %.0f ms",
+                         stats["n"], stats["loop_max"], stats["draw_max"])
+                stats.update(n=0, loop_max=0.0, draw_max=0.0, t=time.monotonic())
+            time.sleep(0.005 if (app.pb or app.item is not None or dash) else 0.03)
     except Exception:
         log.exception("unexpected error")
         code = 1

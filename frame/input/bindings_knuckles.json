@@ -1,0 +1,31 @@
+{
+  "controller_type": "knuckles",
+  "name": "frame-video-player",
+  "bindings": {
+    "/actions/fvp": {
+      "sources": [
+        {
+          "path": "/user/hand/right/input/thumbstick",
+          "mode": "joystick",
+          "inputs": {
+            "position": {
+              "output": "/actions/fvp/in/right_stick"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/left/input/thumbstick",
+          "mode": "joystick",
+          "inputs": {
+            "position": {
+              "output": "/actions/fvp/in/left_stick"
+            },
+            "click": {
+              "output": "/actions/fvp/in/left_click"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
