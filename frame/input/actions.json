@@ -11,10 +11,6 @@
   ],
   "actions": [
     {
-      "name": "/actions/fvp/in/right_stick",
-      "type": "vector2"
-    },
-    {
       "name": "/actions/fvp/in/seek_back",
       "type": "boolean"
     },
@@ -25,6 +21,14 @@
     {
       "name": "/actions/fvp/in/play_pause",
       "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/scroll",
+      "type": "vector2"
+    },
+    {
+      "name": "/actions/fvp/in/turn",
+      "type": "vector2"
     }
   ],
   "action_sets": [
@@ -37,18 +41,20 @@
     {
       "language_tag": "en_US",
       "/actions/fvp": "Video player",
-      "/actions/fvp/in/right_stick": "Turn 360 video / scroll list",
-      "/actions/fvp/in/seek_back": "Back 10 s",
-      "/actions/fvp/in/seek_fwd": "Forward 10 s",
-      "/actions/fvp/in/play_pause": "Play / pause"
+      "/actions/fvp/in/seek_back": "Seek back",
+      "/actions/fvp/in/seek_fwd": "Seek forward",
+      "/actions/fvp/in/play_pause": "Play / pause",
+      "/actions/fvp/in/scroll": "Scroll",
+      "/actions/fvp/in/turn": "Turn view"
     },
     {
       "language_tag": "ja_JP",
       "/actions/fvp": "動画プレイヤー",
-      "/actions/fvp/in/right_stick": "360° の向きを変える・一覧を動かす",
-      "/actions/fvp/in/seek_back": "10 秒戻す",
-      "/actions/fvp/in/seek_fwd": "10 秒進める",
-      "/actions/fvp/in/play_pause": "再生・一時停止"
+      "/actions/fvp/in/seek_back": "シーク戻る",
+      "/actions/fvp/in/seek_fwd": "シーク進む",
+      "/actions/fvp/in/play_pause": "再生・一時停止",
+      "/actions/fvp/in/scroll": "スクロール",
+      "/actions/fvp/in/turn": "視点回転"
     }
   ]
 }

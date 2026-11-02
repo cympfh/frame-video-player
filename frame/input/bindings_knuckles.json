@@ -9,11 +9,21 @@
           "mode": "joystick",
           "inputs": {
             "position": {
-              "output": "/actions/fvp/in/right_stick"
+              "output": "/actions/fvp/in/turn"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/right/input/thumbstick",
+          "mode": "joystick",
+          "inputs": {
+            "position": {
+              "output": "/actions/fvp/in/scroll"
             }
           }
         }
       ]
     }
-  }
+  },
+  "app_key": "cympfh.frame-video-player"
 }

@@ -27,6 +27,7 @@ from fvp_controls import (Edge, dpad_axis, SeekRepeater, resolve_tap, scroll_cla
 
 log = logging.getLogger("fvp")
 KEY = "cympfh.frame-video-player"
+APP_KEY = KEY  # SteamVR app key (binding settings), same string as the overlay key
 HERE = os.path.dirname(os.path.realpath(__file__))
 OSD_W, OSD_H = 600, 100
 NAME = "動画プレイヤー"
@@ -145,8 +146,6 @@ class Panel:
         for k, label in TABS:
             btn("tab:" + k, x, 14, 230, 56, label, on=self.tab == k)
             x += 245
-        btn("sticks", 930, 88, 240, 52, "スティック操作: " + ("入" if app.settings.get("sticks", True) else "切"),
-            on=app.settings.get("sticks", True), size=22)
         # list
         top = 88
         if self.tab == "youtube":
@@ -308,9 +307,11 @@ class App:
         for h in [self.screen] + self.faces + [self.osd]:
             ov.hide(h)
         self.input = None
+        self.last_raw = None
         try:
+            vr.register_app(ov, APP_KEY, os.path.join(HERE, "input/actions.json"), log)
             self.input = vr.Input(ov, os.path.join(HERE, "input/actions.json"), "/actions/fvp",
-                                  ("right_stick",), ("seek_back", "seek_fwd", "play_pause"))
+                                  ("turn", "scroll"), ("seek_back", "seek_fwd", "play_pause"))
             log.info("SteamVR Input: %s", self.input.version)
         except Exception as e:  # the panel still works without sticks
             log.warning("SteamVR Input unavailable: %s", e)
@@ -544,14 +545,17 @@ class App:
 
     def pump_input(self, dt, dash_visible):
         """Sticks via SteamVR Input; the action set is active only while something is playing."""
-        if self.input is None or self.item is None or not self.settings.get("sticks", True) \
-                or self.settings_override.get("hidden"):
+        if self.input is None or self.item is None or self.settings_override.get("hidden"):
             return
         st = self.input.update(self.stick_priority())
         if st is None:
             return
         now = time.monotonic()
-        rx, ry = st["right_stick"]
+        raw = tuple(self.input.raw.get(n) for n in ("seek_back", "seek_fwd", "play_pause"))
+        if raw != self.last_raw:  # (active, pressed) per D-pad action; to debug bindings from the log
+            log.info("dpad raw back=%s fwd=%s play=%s dash=%s", *raw, dash_visible)
+            self.last_raw = raw
+        rx, ry = st["turn"][0], st["scroll"][1]
         if self.mode != "flat":
             d = yaw_step(rx, dt, self.settings.get("turn_speed", 90.0))
             if d:
@@ -725,10 +729,6 @@ class App:
         elif key == "recenter":
             self.yaw = 0.0
             self.place()
-        elif key == "sticks":
-            s["sticks"] = not s.get("sticks", True)
-            self.say("スティック操作: " + ("入(左: 早送り・巻き戻し, 左押し込み: 一時停止, 右: 360° の向き)"
-                                         if s["sticks"] else "切(VRChat などの移動だけに使います)"))
         media.save_settings(s)
         self.dirty = True
 

@@ -488,6 +488,7 @@ class Input:
                 raise OpenVRError("GetActionHandle %s: EVRInputError %d" % (name, e), e)
             self.handles[name] = h.value
         self.analog, self.digital = tuple(analog), tuple(digital)
+        self.raw = {}
 
     def update(self, priority=0):
         """Activate our action set for this frame and read every action. Returns a dict, or None on error."""
@@ -504,5 +505,46 @@ class Input:
             d = DigitalData()
             self._digital(self.handles[n], ctypes.byref(d), ctypes.sizeof(d), 0)
             out[n] = bool(d.bActive and d.bState)
+            self.raw[n] = (bool(d.bActive), bool(d.bState))
         return out
 
+
+
+APPLICATIONS_VERSIONS = ("IVRApplications_007", "IVRApplications_006")
+
+
+def vrmanifest(app_key, action_manifest, binary):
+    """App manifest so SteamVR knows this overlay by name (and lists it in the controller binding settings)."""
+    return {"source": "builtin", "applications": [{
+        "app_key": app_key, "launch_type": "binary", "binary_path_linux": binary,
+        "is_dashboard_overlay": True, "action_manifest_path": action_manifest,
+        "strings": {"en_us": {"name": "Video Player", "description": "Frame video player"},
+                    "ja_jp": {"name": "動画プレイヤー", "description": "Frame の動画プレイヤー"}}}]}
+
+
+def register_app(overlay, app_key, action_manifest, log):
+    """AddApplicationManifest(temporary) + IdentifyApplication(our pid). Must run before SetActionManifestPath.
+    Failures are only logged: input still works under SteamVR's generated key."""
+    import json
+    import os
+    lib = overlay.lib
+    fn = None
+    for ver in APPLICATIONS_VERSIONS:
+        err = ctypes.c_int(0)
+        p = lib.VR_GetGenericInterface(("FnTable:" + ver).encode(), ctypes.byref(err))
+        if err.value == 0 and p:
+            fn = (ctypes.c_void_p * 12).from_address(p)
+            break
+    if fn is None:
+        log.warning("IVRApplications unavailable; binding settings will use the generated key")
+        return False
+    path = os.path.join(os.path.dirname(os.path.abspath(action_manifest)), "frame-video-player.vrmanifest")
+    binary = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(action_manifest))), "frame-video-player")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(vrmanifest(app_key, os.path.abspath(action_manifest), binary), f, ensure_ascii=False, indent=2)
+    add = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_bool)(fn[0])
+    ident = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_uint32, ctypes.c_char_p)(fn[11])
+    e1 = add(path.encode(), True)
+    e2 = ident(os.getpid(), app_key.encode())
+    log.info("app manifest %s: AddApplicationManifest=%d IdentifyApplication=%d (%s)", app_key, e1, e2, ver)
+    return e1 == 0 and e2 == 0
