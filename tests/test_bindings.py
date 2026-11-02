@@ -77,7 +77,7 @@ class Rebindable(unittest.TestCase):
         self.assertEqual(app["app_key"], "cympfh.frame-video-player")
         self.assertEqual(app["action_manifest_path"], "/x/input/actions.json")
         self.assertTrue(app["is_dashboard_overlay"])
-        self.assertEqual(app["binary_path"], "/x/frame-video-player")  # SteamVR skips binary apps without it
+        self.assertEqual(app["binary_path_linux_arm"], "/x/frame-video-player")  # arm64 SteamVR skips the app without it
         self.assertEqual(app["strings"]["ja_jp"]["name"], "動画プレイヤー")
 
     def test_no_sticks_toggle(self):
