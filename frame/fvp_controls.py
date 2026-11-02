@@ -98,3 +98,26 @@ def resolve_tap(down, up, tol=28.0):
     if dk is not None and math.hypot(ux - dx, uy - dy) <= tol:
         return dk
     return None
+
+
+SYSTEM_WORDS = ("system", "steam", "システム", "home", "dashboard")
+
+
+def is_system_origin(name):
+    """True when the localized origin name points at the Steam/system button (never used for playback)."""
+    n = (name or "").lower()
+    return any(w in n for w in SYSTEM_WORDS)
+
+
+class DashGuard:
+    """Ignore stick clicks shortly after the dashboard opens or closes (that is the Steam button)."""
+    WINDOW = 0.6
+
+    def __init__(self):
+        self.prev, self.changed_at = None, -1e9
+
+    def feed(self, visible, now):
+        if self.prev is not None and visible != self.prev:
+            self.changed_at = now
+        self.prev = visible
+        return now - self.changed_at < self.WINDOW

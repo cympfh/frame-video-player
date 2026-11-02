@@ -460,7 +460,7 @@ class Input:
             p = lib.VR_GetGenericInterface(("FnTable:" + ver).encode(), ctypes.byref(err))
             if err.value == 0 and p:
                 self.version = ver
-                self.fn = (ctypes.c_void_p * 7).from_address(p)
+                self.fn = (ctypes.c_void_p * 24).from_address(p)
                 break
         if self.fn is None:
             raise OpenVRError("IVRInput が使えません")
@@ -471,6 +471,8 @@ class Input:
         self._action = f(2, P, H)
         self._update = f(4, ctypes.POINTER(ActiveActionSet), ctypes.c_uint32, ctypes.c_uint32)
         self._digital = f(5, ctypes.c_uint64, ctypes.POINTER(DigitalData), ctypes.c_uint32, ctypes.c_uint64)
+        # 23 = GetOriginLocalizedName(origin, buf, size, flags) in IVRInput_010/011 (openvr_capi.h)
+        self._origin_name = f(23, ctypes.c_uint64, ctypes.c_char_p, ctypes.c_uint32, ctypes.c_int32)
         self._analog = f(6, ctypes.c_uint64, ctypes.POINTER(AnalogData), ctypes.c_uint32, ctypes.c_uint64)
         e = self._manifest(manifest.encode())
         if e:
@@ -488,6 +490,7 @@ class Input:
                 raise OpenVRError("GetActionHandle %s: EVRInputError %d" % (name, e), e)
             self.handles[name] = h.value
         self.analog, self.digital = tuple(analog), tuple(digital)
+        self.origins = {}
 
     def update(self, priority=0):
         """Activate our action set for this frame and read every action. Returns a dict, or None on error."""
@@ -504,4 +507,15 @@ class Input:
             d = DigitalData()
             self._digital(self.handles[n], ctypes.byref(d), ctypes.sizeof(d), 0)
             out[n] = bool(d.bActive and d.bState)
+            self.origins[n] = d.activeOrigin if d.bActive else 0
         return out
+
+    def origin_name(self, n):
+        """Human name of the physical input that drove digital action n last frame ('' if unknown)."""
+        o = self.origins.get(n, 0)
+        if not o:
+            return ""
+        buf = ctypes.create_string_buffer(256)
+        if self._origin_name(o, buf, 256, -1):  # -1 = VRInputString_All (hand + controller + input)
+            return ""
+        return buf.value.decode("utf-8", "replace")

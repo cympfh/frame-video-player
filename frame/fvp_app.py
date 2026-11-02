@@ -22,7 +22,7 @@ import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
 import fvp_openvr as vr
-from fvp_controls import (Edge, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
+from fvp_controls import (DashGuard, Edge, is_system_origin, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
                           wrap_deg, yaw_step)  # noqa: E402
 
 log = logging.getLogger("fvp")
@@ -290,6 +290,7 @@ class App:
         self.osd_until = 0.0
         self.stick_seek = SeekRepeater()
         self.stick_click = Edge()
+        self.dash_guard = DashGuard()
         self.last_scroll_ev = 0.0
         self.settings_override = {}
         self.main, self.thumb = ov.create_dashboard(KEY, NAME)
@@ -561,7 +562,13 @@ class App:
             self.seek(target)
             self.show_osd("%s%d秒 → %s" % ("+" if step > 0 else "−", abs(step), fmt_time(target)))
             log.info("stick seek %+ds -> %s (%.0f ms)", step, fmt_time(target), (time.monotonic() - t0) * 1000)
+        near_dash = self.dash_guard.feed(bool(dash_visible), now)
         if self.stick_click.feed(st["left_click"]):
+            origin = self.input.origin_name("left_click")
+            if near_dash or is_system_origin(origin):
+                log.info("stick click ignored (origin %r, dashboard toggled %s)", origin, near_dash)
+                return
+            log.info("stick click origin: %r", origin)
             t0 = time.monotonic()
             self.toggle_pause()
             self.show_osd("一時停止" if self.paused else "再生")

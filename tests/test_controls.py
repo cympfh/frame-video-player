@@ -130,5 +130,21 @@ class Taps(unittest.TestCase):
         self.assertEqual(c.resolve_tap(None, ("pause", 1, 1)), "pause")
 
 
+
+class SystemGuard(unittest.TestCase):
+    def test_origin(self):
+        self.assertTrue(c.is_system_origin("Left Hand Frame Controller System"))
+        self.assertTrue(c.is_system_origin("左手 Steam ボタン"))
+        self.assertFalse(c.is_system_origin("Left Hand Frame Controller Thumbstick"))
+        self.assertFalse(c.is_system_origin(""))
+
+    def test_dash_guard(self):
+        g = c.DashGuard()
+        self.assertFalse(g.feed(False, 10.0))
+        self.assertTrue(g.feed(True, 10.1))
+        self.assertTrue(g.feed(True, 10.5))
+        self.assertFalse(g.feed(True, 11.0))
+
+
 if __name__ == "__main__":
     unittest.main()
