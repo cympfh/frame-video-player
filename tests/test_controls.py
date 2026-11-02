@@ -131,19 +131,17 @@ class Taps(unittest.TestCase):
 
 
 
-class SystemGuard(unittest.TestCase):
-    def test_origin(self):
-        self.assertTrue(c.is_system_origin("Left Hand Frame Controller System"))
-        self.assertTrue(c.is_system_origin("左手 Steam ボタン"))
-        self.assertFalse(c.is_system_origin("Left Hand Frame Controller Thumbstick"))
-        self.assertFalse(c.is_system_origin(""))
+class Dpad(unittest.TestCase):
+    def test_axis(self):
+        self.assertEqual(c.dpad_axis(False, True), 1.0)
+        self.assertEqual(c.dpad_axis(True, False), -1.0)
+        self.assertEqual(c.dpad_axis(False, False), 0.0)
 
-    def test_dash_guard(self):
-        g = c.DashGuard()
-        self.assertFalse(g.feed(False, 10.0))
-        self.assertTrue(g.feed(True, 10.1))
-        self.assertTrue(g.feed(True, 10.5))
-        self.assertFalse(g.feed(True, 11.0))
+    def test_hold_repeats_seek(self):
+        r = c.SeekRepeater()
+        self.assertEqual(r.feed(c.dpad_axis(False, True), 0.0), r.STEP)
+        self.assertNotEqual(r.feed(1.0, 5.0), 0)
+        self.assertEqual(r.feed(0.0, 5.1), 0)
 
 
 if __name__ == "__main__":

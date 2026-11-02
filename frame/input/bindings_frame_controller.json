@@ -14,14 +14,29 @@
           }
         },
         {
-          "path": "/user/hand/left/input/thumbstick",
-          "mode": "joystick",
+          "path": "/user/hand/left/input/dpad_left",
+          "mode": "button",
           "inputs": {
-            "position": {
-              "output": "/actions/fvp/in/left_stick"
-            },
             "click": {
-              "output": "/actions/fvp/in/left_click"
+              "output": "/actions/fvp/in/seek_back"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/left/input/dpad_right",
+          "mode": "button",
+          "inputs": {
+            "click": {
+              "output": "/actions/fvp/in/seek_fwd"
+            }
+          }
+        },
+        {
+          "path": "/user/hand/left/input/dpad_down",
+          "mode": "button",
+          "inputs": {
+            "click": {
+              "output": "/actions/fvp/in/play_pause"
             }
           }
         }

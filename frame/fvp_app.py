@@ -22,7 +22,7 @@ import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
 import fvp_openvr as vr
-from fvp_controls import (DashGuard, Edge, is_system_origin, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
+from fvp_controls import (Edge, dpad_axis, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
                           wrap_deg, yaw_step)  # noqa: E402
 
 log = logging.getLogger("fvp")
@@ -288,9 +288,8 @@ class App:
         self.held_url = None
         self.yaw = 0.0
         self.osd_until = 0.0
-        self.stick_seek = SeekRepeater()
-        self.stick_click = Edge()
-        self.dash_guard = DashGuard()
+        self.dpad_seek = SeekRepeater()
+        self.dpad_play = Edge()
         self.last_scroll_ev = 0.0
         self.settings_override = {}
         self.main, self.thumb = ov.create_dashboard(KEY, NAME)
@@ -311,7 +310,7 @@ class App:
         self.input = None
         try:
             self.input = vr.Input(ov, os.path.join(HERE, "input/actions.json"), "/actions/fvp",
-                                  ("right_stick", "left_stick"), ("left_click",))
+                                  ("right_stick",), ("seek_back", "seek_fwd", "play_pause"))
             log.info("SteamVR Input: %s", self.input.version)
         except Exception as e:  # the panel still works without sticks
             log.warning("SteamVR Input unavailable: %s", e)
@@ -561,8 +560,12 @@ class App:
             # the dashboard sends scroll events only while the laser points at the panel; fill in otherwise
             if self.panel.scroll_by(scroll_from_stick(ry, dt)):
                 self.dirty = True
-        lx, _ly = st["left_stick"]
-        step = self.stick_seek.feed(lx, now)
+        # left D-pad, only while the dashboard is closed (the panel has its own buttons then)
+        if dash_visible:
+            self.dpad_seek.feed(0.0, now)
+            self.dpad_play.feed(False)
+            return
+        step = self.dpad_seek.feed(dpad_axis(st["seek_back"], st["seek_fwd"]), now)
         if step:
             t0 = time.monotonic()
             target = max(0.0, self.position() + step)
@@ -570,18 +573,12 @@ class App:
                 target = min(target, self.item.duration - 1)
             self.seek(target)
             self.show_osd("%s%d秒 → %s" % ("+" if step > 0 else "−", abs(step), fmt_time(target)))
-            log.info("stick seek %+ds -> %s (%.0f ms)", step, fmt_time(target), (time.monotonic() - t0) * 1000)
-        near_dash = self.dash_guard.feed(bool(dash_visible), now)
-        if self.stick_click.feed(st["left_click"]):
-            origin = self.input.origin_name("left_click")
-            if near_dash or is_system_origin(origin):
-                log.info("stick click ignored (origin %r, dashboard toggled %s)", origin, near_dash)
-                return
-            log.info("stick click origin: %r", origin)
+            log.info("dpad seek %+ds -> %s (%.0f ms)", step, fmt_time(target), (time.monotonic() - t0) * 1000)
+        if self.dpad_play.feed(st["play_pause"]):
             t0 = time.monotonic()
             self.toggle_pause()
             self.show_osd("一時停止" if self.paused else "再生")
-            log.info("stick pause toggle -> %s (%.0f ms)", "paused" if self.paused else "playing",
+            log.info("dpad pause toggle -> %s (%.0f ms)", "paused" if self.paused else "playing",
                      (time.monotonic() - t0) * 1000)
 
     def visible_video_overlays(self):

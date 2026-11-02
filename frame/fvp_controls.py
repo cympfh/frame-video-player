@@ -100,24 +100,7 @@ def resolve_tap(down, up, tol=28.0):
     return None
 
 
-SYSTEM_WORDS = ("system", "steam", "システム", "home", "dashboard")
 
-
-def is_system_origin(name):
-    """True when the localized origin name points at the Steam/system button (never used for playback)."""
-    n = (name or "").lower()
-    return any(w in n for w in SYSTEM_WORDS)
-
-
-class DashGuard:
-    """Ignore stick clicks shortly after the dashboard opens or closes (that is the Steam button)."""
-    WINDOW = 0.6
-
-    def __init__(self):
-        self.prev, self.changed_at = None, -1e9
-
-    def feed(self, visible, now):
-        if self.prev is not None and visible != self.prev:
-            self.changed_at = now
-        self.prev = visible
-        return now - self.changed_at < self.WINDOW
+def dpad_axis(back, fwd):
+    """Two D-pad buttons -> -1 / 0 / +1 for SeekRepeater."""
+    return (1.0 if fwd else 0.0) - (1.0 if back else 0.0)

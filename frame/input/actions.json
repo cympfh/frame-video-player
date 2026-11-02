@@ -1,20 +1,54 @@
 {
   "default_bindings": [
-    {"controller_type": "frame_controller", "binding_url": "bindings_frame_controller.json"},
-    {"controller_type": "knuckles", "binding_url": "bindings_knuckles.json"}
+    {
+      "controller_type": "frame_controller",
+      "binding_url": "bindings_frame_controller.json"
+    },
+    {
+      "controller_type": "knuckles",
+      "binding_url": "bindings_knuckles.json"
+    }
   ],
   "actions": [
-    {"name": "/actions/fvp/in/right_stick", "type": "vector2"},
-    {"name": "/actions/fvp/in/left_stick", "type": "vector2"},
-    {"name": "/actions/fvp/in/left_click", "type": "boolean"}
+    {
+      "name": "/actions/fvp/in/right_stick",
+      "type": "vector2"
+    },
+    {
+      "name": "/actions/fvp/in/seek_back",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/seek_fwd",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/play_pause",
+      "type": "boolean"
+    }
   ],
-  "action_sets": [{"name": "/actions/fvp", "usage": "single"}],
+  "action_sets": [
+    {
+      "name": "/actions/fvp",
+      "usage": "single"
+    }
+  ],
   "localization": [
-    {"language_tag": "en_US", "/actions/fvp": "Video player",
-     "/actions/fvp/in/right_stick": "Turn 360 video / scroll list",
-     "/actions/fvp/in/left_stick": "Seek", "/actions/fvp/in/left_click": "Play / pause"},
-    {"language_tag": "ja_JP", "/actions/fvp": "動画プレイヤー",
-     "/actions/fvp/in/right_stick": "360° の向きを変える・一覧を動かす",
-     "/actions/fvp/in/left_stick": "早送り・巻き戻し", "/actions/fvp/in/left_click": "再生・一時停止"}
+    {
+      "language_tag": "en_US",
+      "/actions/fvp": "Video player",
+      "/actions/fvp/in/right_stick": "Turn 360 video / scroll list",
+      "/actions/fvp/in/seek_back": "Back 10 s",
+      "/actions/fvp/in/seek_fwd": "Forward 10 s",
+      "/actions/fvp/in/play_pause": "Play / pause"
+    },
+    {
+      "language_tag": "ja_JP",
+      "/actions/fvp": "動画プレイヤー",
+      "/actions/fvp/in/right_stick": "360° の向きを変える・一覧を動かす",
+      "/actions/fvp/in/seek_back": "10 秒戻す",
+      "/actions/fvp/in/seek_fwd": "10 秒進める",
+      "/actions/fvp/in/play_pause": "再生・一時停止"
+    }
   ]
 }
