@@ -57,14 +57,15 @@ def detect_projection(name, info):
                         return "180"
                     return "360"
     n = name.lower()
-    if re.search(r"(^|[^0-9])180([^0-9]|$)|vr180|_180_|180x180", n):
+    # "180" / "360" only as a word of its own (not "ep180", "x360", "1360")
+    if re.search(r"(^|[^0-9a-z])(vr)?180(°|x180)?([^0-9a-z]|$)", n):
         return "180"
-    if re.search(r"(^|[^0-9])360([^0-9]|$)|equirect|_360_|360vr|360°", n):
+    if re.search(r"(^|[^0-9a-z])360(°|vr)?([^0-9a-z]|$)|equirect", n):
         return "360"
     return "flat"
 
 
-def detect_stereo(name, info, w, h):
+def detect_stereo(name, info, w, h, projection="flat"):
     """'mono' / 'sbs' / 'tb' (stereo layout; only the left/top eye is shown)."""
     for st in info.get("streams", []):
         for sd in st.get("side_data_list", []) or []:
@@ -75,10 +76,17 @@ def detect_stereo(name, info, w, h):
                 if "top" in t:
                     return "tb"
     n = name.lower()
-    if re.search(r"(^|[^a-z])(sbs|lr|3dh)([^a-z]|$)", n):
+    if re.search(r"(^|[^a-z0-9])(h?sbs|3dh)([^a-z0-9]|$)", n):
         return "sbs"
-    if re.search(r"(^|[^a-z])(tb|ou|3dv)([^a-z]|$)", n):
+    if re.search(r"(^|[^a-z0-9])(h?ou|3dv)([^a-z0-9]|$)", n):
         return "tb"
+    # Short tags like "LR" / "TB" are too common in ordinary names; trust them only on VR videos
+    # (e.g. "_180_LR"). The panel has a manual 3D button for everything else.
+    if projection != "flat":
+        if re.search(r"(^|[^a-z0-9])lr([^a-z0-9]|$)", n):
+            return "sbs"
+        if re.search(r"(^|[^a-z0-9])tb([^a-z0-9]|$)", n):
+            return "tb"
     return "mono"
 
 
@@ -128,7 +136,7 @@ class Item:
         if self.audio == self.video:
             self.has_audio = any(s.get("codec_type") == "audio" for s in self.info.get("streams", []))
         self.projection = detect_projection(self.title, self.info)
-        self.stereo = detect_stereo(self.title, self.info, self.width, self.height)
+        self.stereo = detect_stereo(self.title, self.info, self.width, self.height, self.projection)
         log.info("probe: %s %dx%d %.1fs proj=%s stereo=%s subs=%d audio=%s", self.title, self.width, self.height,
                  self.duration, self.projection, self.stereo, self.sub_streams, self.has_audio)
 
@@ -183,9 +191,13 @@ def list_pc():
     items = []
     for f in data.get("files", []):
         p = f["path"]
-        items.append(Item("pc", p, "pc:" + p, "%s/v/%s/%s" % (base, token, urllib.parse.quote(p))))
+        items.append(Item("pc", p, "pc:" + p, pc_url(base, token, p)))
     log.info("PC video list: %d files", len(items))
     return items, url
+
+
+def pc_url(base, token, rel):
+    return "%s/v/%s/%s" % (base, token, urllib.parse.quote(rel))
 
 
 def youtube_item(url):
@@ -193,7 +205,7 @@ def youtube_item(url):
     if not ytd:
         raise RuntimeError("yt-dlp が入っていません")
     cmd = [ytd, "--no-playlist", "-f", "bv*[height<=1440][vcodec!*=av01]+ba/b", "--print", "%(title)s",
-           "--print", "urls", url]
+           "--print", "urls", "--", url]
     log.info("yt-dlp: %s", url)
     r = subprocess.run(cmd, capture_output=True, timeout=90)
     err = r.stderr.decode(errors="replace")
@@ -225,12 +237,21 @@ def frame_size(item, mode):
 def _sub_filter(item, sub_on):
     if not sub_on or item.kind == "youtube":
         return None
-    esc = lambda p: p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")  # noqa
     if item.subs:
-        return "subtitles='%s'" % esc(item.subs)
+        return "subtitles=filename=%s" % filter_path(item.subs)
     if item.sub_streams and item.kind == "frame":
-        return "subtitles='%s':si=0" % esc(item.video)
+        return "subtitles=filename=%s:si=0" % filter_path(item.video)
     return None
+
+
+def filter_path(p):
+    """Escape a path for use as a filter option value inside a -vf filtergraph.
+
+    ffmpeg unescapes twice: first the filtergraph (\\ ' [ ] , ; are special), then the option
+    value (\\ ' : are special). See "Notes on filtergraph escaping" in ffmpeg-filters.
+    """
+    lvl1 = re.sub(r"([\\':])", r"\\\1", p)
+    return re.sub(r"([\\'\[\],;])", r"\\\1", lvl1)
 
 
 def video_filter(item, mode, sub_on):

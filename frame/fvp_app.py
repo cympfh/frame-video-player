@@ -182,13 +182,16 @@ class Panel:
                 align="right")
         y1 = y0 + 86
         on = it is not None
-        btn("seek:-30", 30, y1, 130, 64, "−30秒", enabled=on)
-        btn("seek:-10", 170, y1, 130, 64, "−10秒", enabled=on)
-        btn("pause", 310, y1, 220, 64, "再生" if app.paused else "一時停止", on=True, enabled=on)
-        btn("seek:10", 540, y1, 130, 64, "+10秒", enabled=on)
-        btn("seek:30", 680, y1, 130, 64, "+30秒", enabled=on)
-        btn("next", 820, y1, 160, 64, "次の動画", enabled=on)
-        btn("stop", 990, y1, 180, 64, "停止", enabled=on)
+        btn("seek:-30", 30, y1, 115, 64, "−30秒", enabled=on)
+        btn("seek:-10", 155, y1, 115, 64, "−10秒", enabled=on)
+        btn("pause", 280, y1, 190, 64, "再生" if app.paused else "一時停止", on=True, enabled=on)
+        btn("seek:10", 480, y1, 115, 64, "+10秒", enabled=on)
+        btn("seek:30", 605, y1, 115, 64, "+30秒", enabled=on)
+        btn("next", 730, y1, 140, 64, "次の動画", enabled=on)
+        btn("stop", 880, y1, 120, 64, "停止", enabled=on)
+        st = it.stereo if it else "mono"
+        btn("stereo", 1010, y1, 160, 64, {"mono": "3D: なし", "sbs": "3D: 左右", "tb": "3D: 上下"}[st],
+            size=24, enabled=on)
         y2 = y1 + 80
         cv.text("音量 %d%%" % round(app.settings["volume"] * 100), 30, y2 + 40, 22, "#cbd5e1")
         btn("vol:-", 160, y2, 64, 60, "−")
@@ -211,6 +214,17 @@ class Panel:
             if bx <= x <= bx + bw and by <= y <= by + bh:
                 return key, (x - bx) / float(bw)
         return None, 0
+
+
+def panel_xy(x, y, flip=True):
+    """OpenVR mouse coordinates (units of SetOverlayMouseScale = W x H) -> panel image coordinates (top-left origin).
+
+    OpenVR reports the mouse in texture-bounds space with v growing from vMin to vMax. Our GL texture
+    holds the image top row first, and with flip on we set bounds vMin=1, vMax=0 so the image shows
+    upright; the same flip turns OpenVR's bottom-up y into top-down, so y is used as is. Without flip
+    (raw bounds 0..1) the y has to be turned over, as frame-steamvr-remote does for SetOverlayRaw.
+    """
+    return x, (y if flip else H - y)
 
 
 # ------------------------------------------------------------------ app
@@ -482,6 +496,23 @@ class App:
         self.place()
         self.dirty = True
 
+    def refresh_pc_token(self, pos):
+        """The PC forgets tokens nobody used for 12 hours (or after many newer ones): get a new one, retry once."""
+        it = self.item
+        self.stop_playback(save=False)
+        it.refreshed = True
+        self.say("PC につなぎ直しています…")
+
+        def done(r, e):
+            if e or self.item is not it:
+                self.say("PC の動画を開けません: %s" % media.redact(e), True)
+                return
+            base, token, _url = r
+            it.video = it.audio = media.pc_url(base, token, it.title)
+            self.play_at(pos)
+            self.say("再生中: %s" % it.title)
+        self.run_job(media.pc_video, done)
+
     def restart_same(self):
         if self.item is not None and not self.paused:
             self.play_at(self.position())
@@ -519,6 +550,10 @@ class App:
             self.mode = {"flat": "360", "360": "180", "180": "flat"}[self.mode]
             self.restart_same()
             self.place()
+        elif key == "stereo" and self.item:
+            # stereo videos show only the left (or top) eye; this lets the user fix a wrong guess
+            self.item.stereo = {"mono": "sbs", "sbs": "tb", "tb": "mono"}[self.item.stereo]
+            self.restart_same()
         elif key == "subs":
             s["subs"] = not s["subs"]
             if self.mode == "flat":
@@ -551,6 +586,8 @@ class App:
             return
         buf = pb.take()
         if buf is not None:
+            if self.item is not None and getattr(self.item, "refreshed", False):
+                self.item.refreshed = False
             self.ctx.upload(self.vtex, pb.w, pb.h, buf)
             for h in self.visible_video_overlays():
                 e = self.ov.set_gl_texture(h, self.vtex)
@@ -561,6 +598,9 @@ class App:
             if pb.frames == 0 or not ended:
                 rc = pb.vproc.returncode
                 log.warning("video stopped early (exit %s, %d frames)", rc, pb.frames)
+                if pb.frames == 0 and self.item.kind == "pc" and not getattr(self.item, "refreshed", False):
+                    self.refresh_pc_token(pb.position())
+                    return
                 self.say("再生が止まりました(ログを見てください)", True)
                 self.paused_pos = pb.position()
                 self.stop_playback(save=True)
@@ -715,7 +755,7 @@ def main():
                     log.info("quit event from SteamVR")
                     stop["flag"] = True
                 elif t in (vr.EV_MOUSE_MOVE, vr.EV_MOUSE_DOWN, vr.EV_MOUSE_UP):
-                    x, y = ev.x, H - ev.y
+                    x, y = panel_xy(ev.x, ev.y, app.settings.get("flip", True))
                     key, frac = app.panel.hit(x, y)
                     if t == vr.EV_MOUSE_MOVE:
                         if key != app.panel.hover:
