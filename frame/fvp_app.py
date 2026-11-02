@@ -22,12 +22,11 @@ import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
 import fvp_openvr as vr
-from fvp_controls import (ButtonGate, input_priority, Edge, dpad_axis, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
-                          wrap_deg, yaw_step)  # noqa: E402
+from fvp_controls import (TURN_STEP, resolve_tap, scroll_clamp, scroll_from_smooth,
+                          wrap_deg)  # noqa: E402
 
 log = logging.getLogger("fvp")
 KEY = "cympfh.frame-video-player"
-APP_KEY = KEY  # SteamVR app key (binding settings), same string as the overlay key
 HERE = os.path.dirname(os.path.realpath(__file__))
 OSD_W, OSD_H = 600, 100
 NAME = "動画プレイヤー"
@@ -86,7 +85,7 @@ def screen_matrix(pose, distance):
 
 def turn(f, r, yaw_deg):
     """Turn the floor-plane frame (forward, right) so that the content on the right comes to the front
-    for positive yaw (what the user expects when pushing the stick right)."""
+    for positive yaw (what the user expects from ▶)."""
     a = math.radians(yaw_deg)
     c, s = math.cos(a), math.sin(a)
     f2 = [c * f[i] - s * r[i] for i in range(3)]
@@ -121,7 +120,7 @@ class Panel:
     def __init__(self):
         self.tab = "frame"
         self.items = []
-        self.scroll = 0.0  # in rows; fractional while the stick scrolls smoothly
+        self.scroll = 0.0  # in rows; fractional with smooth laser scrolling
         self.status = ""
         self.hover = None
         self.buttons = []
@@ -224,15 +223,18 @@ class Panel:
         btn("vol:-", 160, y2, 64, 60, "−")
         btn("vol:+", 230, y2, 64, 60, "+")
         mode_label = {"flat": "表示: 平面", "360": "表示: 360°", "180": "表示: 180°"}[app.mode]
-        btn("mode", 310, y2, 200, 60, mode_label, size=24, enabled=on)
-        btn("subs", 520, y2, 150, 60, "字幕: 入" if app.settings["subs"] else "字幕: 切", size=24)
-        cv.text("大きさ", 690, y2 + 40, 22, "#cbd5e1")
-        btn("size:-", 760, y2, 56, 60, "−")
-        btn("size:+", 820, y2, 56, 60, "+")
-        cv.text("距離", 890, y2 + 40, 22, "#cbd5e1")
-        btn("dist:-", 940, y2, 56, 60, "−")
-        btn("dist:+", 1000, y2, 56, 60, "+")
-        btn("recenter", 1066, y2, 104, 60, "正面へ", size=22)
+        btn("mode", 304, y2, 166, 60, mode_label, size=22, enabled=on)
+        btn("subs", 478, y2, 112, 60, "字幕: 入" if app.settings["subs"] else "字幕: 切", size=22)
+        cv.text("大きさ", 598, y2 + 40, 22, "#cbd5e1")
+        btn("size:-", 666, y2, 52, 60, "−")
+        btn("size:+", 724, y2, 52, 60, "+")
+        cv.text("距離", 786, y2 + 40, 22, "#cbd5e1")
+        btn("dist:-", 834, y2, 52, 60, "−")
+        btn("dist:+", 892, y2, 52, 60, "+")
+        turnable = on and app.mode != "flat"  # 360 / 180: turn the view with the laser
+        btn("turn:-", 954, y2, 56, 60, "◀", enabled=turnable)
+        btn("recenter", 1016, y2, 94, 60, "正面へ", size=22)
+        btn("turn:+", 1116, y2, 54, 60, "▶", enabled=turnable)
         cv.text(app.status[:80], 30, H - 22, 22, "#fbbf24" if app.status_warn else "#94a3b8")
         return cv
 
@@ -287,10 +289,6 @@ class App:
         self.held_url = None
         self.yaw = 0.0
         self.osd_until = 0.0
-        self.dpad_seek = SeekRepeater()
-        self.dpad_play = Edge()
-        self.gate = ButtonGate(("seek_back", "seek_fwd", "play_pause"))
-        self.last_scroll_ev = 0.0
         self.settings_override = {}
         self.main, self.thumb = ov.create_dashboard(KEY, NAME)
         ov.set_width(self.main, PANEL_M)
@@ -307,15 +305,6 @@ class App:
         self.otex = ctx.new_texture(OSD_W, OSD_H)
         for h in [self.screen] + self.faces + [self.osd]:
             ov.hide(h)
-        self.input = None
-        self.last_raw = None
-        try:
-            vr.register_app(ov, APP_KEY, os.path.join(HERE, "input/actions.json"), log)
-            self.input = vr.Input(ov, os.path.join(HERE, "input/actions.json"), "/actions/fvp",
-                                  ("turn", "scroll"), ("seek_back", "seek_fwd", "play_pause"))
-            log.info("SteamVR Input: %s", self.input.version)
-        except Exception as e:  # the panel still works without sticks
-            log.warning("SteamVR Input unavailable: %s", e)
         self.load_tab("frame")
 
     # ---- helpers
@@ -537,54 +526,6 @@ class App:
             self.osd_until = 0.0
             self.ov.hide(self.osd)
 
-    def stick_priority(self, dash_visible):
-        # Overlay apps get NO controller input while the dashboard is closed (a scene app / home has focus):
-        # seen on the Frame 16:29-16:30, action states froze and only changed when the dashboard opened or
-        # closed. Global overlay priority fixes that, but SteamVR only honours it with
-        # /settings/steamvr/globalActionSetPriority on (Developer: "Enable global input from overlays").
-        # Ask for it whenever something is loaded and the dashboard is closed; with the dashboard open use 0
-        # so the dashboard keeps its own input.
-        return input_priority(self.item is not None, dash_visible, vr.ACTION_SET_OVERLAY_GLOBAL_PRIORITY)
-
-    def pump_input(self, dt, dash_visible):
-        """Sticks via SteamVR Input; the action set is active only while something is playing."""
-        if self.input is None or self.item is None or self.settings_override.get("hidden"):
-            return
-        st = self.input.update(self.stick_priority(dash_visible))
-        if st is None:
-            return
-        now = time.monotonic()
-        raw = tuple(self.input.raw.get(n) for n in ("seek_back", "seek_fwd", "play_pause"))
-        if raw != self.last_raw:  # (active, pressed) per D-pad action; to debug bindings from the log
-            log.info("dpad raw back=%s fwd=%s play=%s dash=%s", *raw, dash_visible)
-            self.last_raw = raw
-        rx, ry = st["turn"][0], st["scroll"][1]
-        if self.mode != "flat":
-            d = yaw_step(rx, dt, self.settings.get("turn_speed", 90.0))
-            if d:
-                self.turn_view(d)
-        if dash_visible and now - self.last_scroll_ev > 0.5:
-            # the dashboard sends scroll events only while the laser points at the panel; fill in otherwise
-            if self.panel.scroll_by(scroll_from_stick(ry, dt)):
-                self.dirty = True
-        # bound buttons: only while the dashboard has been closed for a moment, never on its open/close
-        g = self.gate.feed(st, dash_visible, now)
-        step = self.dpad_seek.feed(dpad_axis(g["seek_back"], g["seek_fwd"]), now)
-        if step:
-            t0 = time.monotonic()
-            target = max(0.0, self.position() + step)
-            if self.item.duration:
-                target = min(target, self.item.duration - 1)
-            self.seek(target)
-            self.show_osd("%s%d秒 → %s" % ("+" if step > 0 else "−", abs(step), fmt_time(target)))
-            log.info("dpad seek %+ds -> %s (%.0f ms)", step, fmt_time(target), (time.monotonic() - t0) * 1000)
-        if self.dpad_play.feed(g["play_pause"]):
-            t0 = time.monotonic()
-            self.toggle_pause("action play_pause")
-            self.show_osd("一時停止" if self.paused else "再生")
-            log.info("dpad pause toggle -> %s (%.0f ms)", "paused" if self.paused else "playing",
-                     (time.monotonic() - t0) * 1000)
-
     def visible_video_overlays(self):
         if self.item is None:
             return []
@@ -728,6 +669,9 @@ class App:
         elif key in ("dist:-", "dist:+"):
             s["distance"] = round(min(15.0, max(0.6, s["distance"] + (0.5 if key == "dist:+" else -0.5))), 2)
             self.place()
+        elif key in ("turn:-", "turn:+"):
+            if self.item is not None and self.mode != "flat":
+                self.turn_view(TURN_STEP if key == "turn:+" else -TURN_STEP)
         elif key == "recenter":
             self.yaw = 0.0
             self.place()
@@ -920,7 +864,7 @@ def main():
     test = {"until": 0}
     code = 0
     last_tick = 0.0
-    ov.set_flag(app.main, vr.FLAG_SEND_SMOOTH_SCROLL, True)  # right stick over the panel -> EV_SCROLL_SMOOTH
+    ov.set_flag(app.main, vr.FLAG_SEND_SMOOTH_SCROLL, True)  # laser scroll over the panel -> EV_SCROLL_SMOOTH
     down = None          # (key, x, y) at mouse down: taps survive a little pointer shake
     pending_click = None  # monotonic time of the last click, for the latency log
     stats = {"n": 0, "loop_max": 0.0, "draw_max": 0.0, "t": time.monotonic()}
@@ -937,7 +881,6 @@ def main():
                     stop["flag"] = True
                 elif t in (vr.EV_SCROLL_SMOOTH, vr.EV_SCROLL_DISCRETE):
                     # VREvent_Scroll_t xdelta/ydelta share the place of the mouse x/y
-                    app.last_scroll_ev = time.monotonic()
                     rows = scroll_from_smooth(ev.y) if t == vr.EV_SCROLL_SMOOTH else -ev.y * 2
                     if app.settings.get("scroll_invert"):
                         rows = -rows
@@ -977,11 +920,6 @@ def main():
                         app.panel.hover = None
                         app.dirty = True
             dash = ov.dashboard_visible()
-            try:
-                app.pump_input(dt, dash)
-            except Exception:
-                log.exception("stick input failed")
-                app.input = None
             app.pump_osd()
             for line in ctl.poll():
                 try:
