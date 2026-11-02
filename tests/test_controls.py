@@ -144,5 +144,53 @@ class Dpad(unittest.TestCase):
         self.assertEqual(r.feed(0.0, 5.1), 0)
 
 
+class Gate(unittest.TestCase):
+    N = ("seek_back", "seek_fwd", "play_pause")
+    ALL = {"seek_back": True, "seek_fwd": True, "play_pause": True}
+    NONE = {}
+
+    def run_seq(self, seq):
+        g, e, hits = c.ButtonGate(self.N), c.Edge(), 0
+        for st, dash, t in seq:
+            hits += e.feed(g.feed(st, dash, t)["play_pause"])
+        return hits
+
+    def test_dashboard_close_with_everything_pressed_never_pauses(self):
+        # the exact pattern from the Frame log: dash closes and all actions read pressed
+        seq = [(self.NONE, True, 0.0), (self.ALL, False, 1.0), (self.ALL, False, 2.5), (self.NONE, False, 3.0)]
+        self.assertEqual(self.run_seq(seq), 0)
+
+    def test_dashboard_open_close_never_changes_play_state(self):
+        seq, t = [], 0.0
+        for k in range(10):
+            for st in (self.NONE, {"play_pause": True}, self.ALL):
+                seq.append((st, k % 2 == 0, t)); t += 0.05
+        self.assertEqual(self.run_seq(seq), 0)
+
+    def test_press_held_through_close_needs_release(self):
+        p = {"play_pause": True}
+        seq = [(p, True, 0.0), (p, False, 0.1), (p, False, 2.0), (self.NONE, False, 2.1), (p, False, 2.2)]
+        self.assertEqual(self.run_seq(seq), 1)
+
+    def test_real_press_after_settle(self):
+        seq = [(self.NONE, False, 0.0), (self.NONE, False, 1.0), ({"play_pause": True}, False, 1.1)]
+        self.assertEqual(self.run_seq(seq), 1)
+
+    def test_chord_ignored(self):
+        seq = [(self.NONE, False, 0.0), (self.NONE, False, 1.0),
+               ({"play_pause": True, "seek_back": True}, False, 1.1), (self.NONE, False, 1.2)]
+        self.assertEqual(self.run_seq(seq), 0)
+
+
+class OverlayVisibility(unittest.TestCase):
+    def test_no_event_or_dashboard_path_toggles_pause(self):
+        """Only the panel button, the bound action (through ButtonGate) and the control socket may pause."""
+        import re
+        src = open(os.path.join(os.path.dirname(__file__), "..", "frame", "fvp_app.py"), encoding="utf-8").read()
+        callers = re.findall(r'toggle_pause\("([^"]+)"\)', src)
+        self.assertEqual(sorted(callers), ["action play_pause", "control socket", "panel click"])
+        self.assertNotRegex(src, r"self\.paused = True(?![^\n]*#)")  # only toggle_pause / stop paths set it
+
+
 if __name__ == "__main__":
     unittest.main()

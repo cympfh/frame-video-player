@@ -104,3 +104,33 @@ def resolve_tap(down, up, tol=28.0):
 def dpad_axis(back, fwd):
     """Two D-pad buttons -> -1 / 0 / +1 for SeekRepeater."""
     return (1.0 if fwd else 0.0) - (1.0 if back else 0.0)
+
+
+class ButtonGate:
+    """Filters the boolean actions (seek_back, seek_fwd, play_pause) before they can seek or pause.
+
+    Seen on the Frame (log 16:20:50 / 16:20:53 / 16:20:55): when the Steam button closes the dashboard,
+    SteamVR reports EVERY boolean action as active+pressed in the same frame, which looked like a
+    play/pause press. So:
+      - nothing passes while the dashboard is open, or within SETTLE s of it opening/closing;
+      - anything already held when the gate opens counts as held (needs release + a new press);
+      - two or more actions pressed at once is not a real press: everything is ignored until all released.
+    feed(states, dash_visible, now) -> dict of states that may be used now (all False when blocked).
+    """
+    SETTLE = 0.6
+
+    def __init__(self, names):
+        self.names = tuple(names)
+        self.dash = None
+        self.since = -1e9
+        self.latched = set()   # held when the gate opened (or chorded); ignored until released
+
+    def feed(self, states, dash_visible, now):
+        pressed = {n for n in self.names if states.get(n)}
+        self.latched &= pressed
+        if dash_visible != self.dash:
+            self.dash, self.since = dash_visible, now
+        if dash_visible or now - self.since < self.SETTLE or len(pressed - self.latched) > 1:
+            self.latched |= pressed
+            return {n: False for n in self.names}
+        return {n: (n in pressed and n not in self.latched) for n in self.names}

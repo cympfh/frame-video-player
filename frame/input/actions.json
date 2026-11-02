@@ -1,14 +1,5 @@
 {
-  "default_bindings": [
-    {
-      "controller_type": "frame_controller",
-      "binding_url": "bindings_frame_controller.json"
-    },
-    {
-      "controller_type": "knuckles",
-      "binding_url": "bindings_knuckles.json"
-    }
-  ],
+  "default_bindings": [],
   "actions": [
     {
       "name": "/actions/fvp/in/seek_back",

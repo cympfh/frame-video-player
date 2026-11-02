@@ -22,7 +22,7 @@ import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
 import fvp_openvr as vr
-from fvp_controls import (Edge, dpad_axis, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
+from fvp_controls import (ButtonGate, Edge, dpad_axis, SeekRepeater, resolve_tap, scroll_clamp, scroll_from_smooth, scroll_from_stick,
                           wrap_deg, yaw_step)  # noqa: E402
 
 log = logging.getLogger("fvp")
@@ -289,6 +289,7 @@ class App:
         self.osd_until = 0.0
         self.dpad_seek = SeekRepeater()
         self.dpad_play = Edge()
+        self.gate = ButtonGate(("seek_back", "seek_fwd", "play_pause"))
         self.last_scroll_ev = 0.0
         self.settings_override = {}
         self.main, self.thumb = ov.create_dashboard(KEY, NAME)
@@ -564,12 +565,9 @@ class App:
             # the dashboard sends scroll events only while the laser points at the panel; fill in otherwise
             if self.panel.scroll_by(scroll_from_stick(ry, dt)):
                 self.dirty = True
-        # left D-pad, only while the dashboard is closed (the panel has its own buttons then)
-        if dash_visible:
-            self.dpad_seek.feed(0.0, now)
-            self.dpad_play.feed(False)
-            return
-        step = self.dpad_seek.feed(dpad_axis(st["seek_back"], st["seek_fwd"]), now)
+        # bound buttons: only while the dashboard has been closed for a moment, never on its open/close
+        g = self.gate.feed(st, dash_visible, now)
+        step = self.dpad_seek.feed(dpad_axis(g["seek_back"], g["seek_fwd"]), now)
         if step:
             t0 = time.monotonic()
             target = max(0.0, self.position() + step)
@@ -578,9 +576,9 @@ class App:
             self.seek(target)
             self.show_osd("%s%d秒 → %s" % ("+" if step > 0 else "−", abs(step), fmt_time(target)))
             log.info("dpad seek %+ds -> %s (%.0f ms)", step, fmt_time(target), (time.monotonic() - t0) * 1000)
-        if self.dpad_play.feed(st["play_pause"]):
+        if self.dpad_play.feed(g["play_pause"]):
             t0 = time.monotonic()
-            self.toggle_pause()
+            self.toggle_pause("action play_pause")
             self.show_osd("一時停止" if self.paused else "再生")
             log.info("dpad pause toggle -> %s (%.0f ms)", "paused" if self.paused else "playing",
                      (time.monotonic() - t0) * 1000)
@@ -592,9 +590,11 @@ class App:
             return [self.screen]
         return [h for i, h in enumerate(self.faces) if not (self.mode == "180" and FACES[i] == "back")]
 
-    def toggle_pause(self):
+    def toggle_pause(self, src):
+        """src: who asked (panel button / bound action / control socket), logged so a stray pause is traceable."""
         if self.item is None:
             return
+        log.info("toggle_pause from %s (was %s)", src, "paused" if self.paused else "playing")
         if self.paused:
             self.paused = False
             if self.pb is not None:
@@ -607,7 +607,7 @@ class App:
             if self.pb is not None:
                 self.pb.pause()   # reader waits + SIGSTOP on audio: immediate
             self.remember(self.paused_pos)
-            self.paused = True
+            self.paused = True  # toggle_pause only
             self.say("一時停止 %s" % fmt_time(self.paused_pos))
 
     def seek(self, pos):
@@ -699,7 +699,7 @@ class App:
         elif key.startswith("seek:"):
             self.seek(self.position() + int(key[5:]))
         elif key == "pause":
-            self.toggle_pause()
+            self.toggle_pause("panel click")
         elif key == "next":
             self.next_item()
         elif key == "stop":
@@ -767,7 +767,7 @@ class App:
                 self.say("再生が止まりました(ログを見てください)", True)
                 self.paused_pos = pb.position()
                 self.stop_playback(save=True)
-                self.paused = True
+                self.paused = True  # the video process died (warning logged above)
             else:
                 self.remember(self.item.duration)
                 self.next_item()
@@ -876,7 +876,7 @@ def handle_command(app, line, test):
     elif cmd == "stop":
         app.stop_all()
     elif cmd == "pause":
-        app.toggle_pause()
+        app.toggle_pause("control socket")
 
 
 def _lock():
