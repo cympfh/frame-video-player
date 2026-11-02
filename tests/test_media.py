@@ -164,3 +164,11 @@ class Examples(unittest.TestCase):
         t, u = m.YOUTUBE_EXAMPLES[0]
         self.assertTrue(u.startswith("https://www.youtube.com/watch?v="))
         self.assertEqual(m.detect_projection(t, {}), "360")
+
+
+class Broken(unittest.TestCase):
+    def test_no_picture_is_not_playable(self):
+        it = m.Item("pc", "HAWA.mp4", "k", "u")  # ffprobe: moov atom not found -> 0x0
+        self.assertFalse(m.playable(it))
+        it.width, it.height = 1920, 1080
+        self.assertTrue(m.playable(it))

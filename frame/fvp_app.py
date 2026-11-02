@@ -430,6 +430,9 @@ class App:
             if e:
                 self.say("開けません: %s" % media.redact(e), True)
                 return
+            if not media.playable(it):
+                self.say("開けません: 動画として読めないファイルです(壊れているか、途中までしかありません): %s" % it.title, True)
+                return
             self.playlist = [x for x in self.panel.items if x.kind == it.kind]
             self.start(it)
         self.run_job(it.probe, done)

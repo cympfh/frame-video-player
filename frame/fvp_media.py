@@ -298,6 +298,11 @@ def stream_fps(info):
 HEAVY_PIXELS = 3840 * 2160 * 1.2
 
 
+def playable(item):
+    """False when ffprobe found no picture at all (broken or truncated file): don't start ffmpeg on it."""
+    return item.width > 0 and item.height > 0
+
+
 def too_heavy(item):
     """True when the Frame can not decode this video in real time (8K and up)."""
     return item.width * item.height > HEAVY_PIXELS
