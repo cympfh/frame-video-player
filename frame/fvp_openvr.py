@@ -516,7 +516,7 @@ APPLICATIONS_VERSIONS = ("IVRApplications_007", "IVRApplications_006")
 def vrmanifest(app_key, action_manifest, binary):
     """App manifest so SteamVR knows this overlay by name (and lists it in the controller binding settings)."""
     return {"source": "builtin", "applications": [{
-        "app_key": app_key, "launch_type": "binary", "binary_path_linux": binary,
+        "app_key": app_key, "launch_type": "binary", "binary_path": binary, "binary_path_linux": binary,
         "is_dashboard_overlay": True, "action_manifest_path": action_manifest,
         "strings": {"en_us": {"name": "Video Player", "description": "Frame video player"},
                     "ja_jp": {"name": "動画プレイヤー", "description": "Frame の動画プレイヤー"}}}]}
