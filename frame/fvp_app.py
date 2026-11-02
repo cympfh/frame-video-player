@@ -660,9 +660,16 @@ def handle_command(app, line, test):
     parts = line.split(" ")
     cmd, args = parts[0], parts[1:]
     if cmd in ("play", "test") and args:
-        src = args[0]
+        secs = 15.0
+        if cmd == "test" and len(args) > 1:
+            try:
+                secs = float(args[-1])
+                args = args[:-1]
+            except ValueError:
+                pass
+        src = " ".join(args)  # paths may contain spaces
         if cmd == "test":
-            test.update(until=time.time() + float(args[1] if len(args) > 1 else 15), frames=0, t0=time.time())
+            test.update(until=time.time() + secs, frames=0, t0=time.time())
             app.settings_override = {"volume": 0.0, "hidden": True}
         else:
             app.settings_override = {}
