@@ -119,6 +119,7 @@ class Item:
         self.duration = 0.0
         self.width = self.height = 0
         self.has_audio = True
+        self.codec = ""
         self.sub_streams = 0
         self.projection = "flat"
         self.stereo = "mono"
@@ -133,6 +134,7 @@ class Item:
         vs = [s for s in self.info.get("streams", []) if s.get("codec_type") == "video"]
         if vs:
             self.width, self.height = int(vs[0].get("width") or 0), int(vs[0].get("height") or 0)
+            self.codec = vs[0].get("codec_name") or ""
         self.sub_streams = len([s for s in self.info.get("streams", []) if s.get("codec_type") == "subtitle"])
         if self.audio == self.video:
             self.has_audio = any(s.get("codec_type") == "audio" for s in self.info.get("streams", []))
@@ -290,6 +292,17 @@ def stream_fps(info):
     return 30.0
 
 
+# The Frame decodes video in software (no AV1/HEVC hardware path in ffmpeg there). Measured on the Frame:
+# 8K (7680x3840) AV1 decodes at about 16-20 fps, with the 360 cube filter about 14 fps, so it can not keep
+# up with 30 fps and a seek needs several seconds (keyframes every ~6 s) before the first picture.
+HEAVY_PIXELS = 3840 * 2160 * 1.2
+
+
+def too_heavy(item):
+    """True when the Frame can not decode this video in real time (8K and up)."""
+    return item.width * item.height > HEAVY_PIXELS
+
+
 class Clock:
     """Wall clock that can be paused. now() = seconds played since start."""
 
@@ -311,6 +324,13 @@ class Clock:
         if self.paused_at is not None:
             self.paused_total += self.t() - self.paused_at
             self.paused_at = None
+
+    def restart(self):
+        """Back to 0, keeping the paused state."""
+        now = self.t()
+        self.t0, self.paused_total = now, 0.0
+        if self.paused_at is not None:
+            self.paused_at = now
 
 
 class Playback:
@@ -343,19 +363,35 @@ class Playback:
         log.info("video ffmpeg: %s", redact(" ".join(vcmd)))
         self.vproc = subprocess.Popen(vcmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         self.aproc = None
+        self.acmd = None
+        self.started = False  # becomes True with the first video frame; audio starts only then
         if item.has_audio:
             anet = ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"] \
                 if item.audio.startswith("http") else []
             acmd = common + ["-ss", "%.3f" % self.start_pos] + anet + [
                 "-i", item.audio, "-vn", "-sn", "-af", "volume=%.2f" % volume,
                 "-f", "pulse", "-buffer_duration", str(AUDIO_BUFFER_MS), "-name", "frame-video-player", "fvp"]
-            log.info("audio ffmpeg: %s", redact(" ".join(acmd)))
-            self.aproc = subprocess.Popen(acmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                          start_new_session=True)
-        for name, p in (("video", self.vproc), ("audio", self.aproc)):
-            if p:
-                threading.Thread(target=self._stderr, args=(name, p), daemon=True).start()
+            self.acmd = acmd
+        threading.Thread(target=self._stderr, args=("video", self.vproc), daemon=True).start()
+        self.t_open = time.monotonic()
         threading.Thread(target=self._read, daemon=True).start()
+
+    def _first_frame(self):
+        """Start the clock and the audio together with the first picture, so a slow video start (a heavy
+        file, a far keyframe) never leaves the sound playing alone ahead of a black screen."""
+        with self.lock:
+            if self.stopped:
+                return
+            self.clock.restart()
+            self.started = True
+            log.info("first video frame after %.1f s", time.monotonic() - self.t_open)
+            if self.acmd:
+                log.info("audio ffmpeg: %s", redact(" ".join(self.acmd)))
+                self.aproc = subprocess.Popen(self.acmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                              start_new_session=True)
+                threading.Thread(target=self._stderr, args=("audio", self.aproc), daemon=True).start()
+                if not self.running.is_set():
+                    self._signal(signal.SIGSTOP)
 
     def _stderr(self, name, p):
         for line in p.stderr:
@@ -375,6 +411,8 @@ class Playback:
                 got += r
             if got < self.frame_bytes:
                 break
+            if n == 0:
+                self._first_frame()
             # wait for this frame's time (and while paused)
             while not self.stopped:
                 self.running.wait(0.2)
@@ -397,6 +435,8 @@ class Playback:
         return b
 
     def position(self):
+        if not self.started:
+            return self.start_pos
         return self.start_pos + self.clock.now()
 
     def _signal(self, sig):
@@ -418,7 +458,8 @@ class Playback:
 
     def stop(self):
         """Kill both ffmpeg at once and reap them in the background (never blocks the UI)."""
-        self.stopped = True
+        with self.lock:
+            self.stopped = True
         self.running.set()
         procs = [p for p in (self.vproc, self.aproc) if p]
         for p in procs:
@@ -465,6 +506,13 @@ def save_resume(d):
         for k in sorted(d, key=lambda k: d[k].get("at", 0))[:len(d) - 500]:
             d.pop(k)
     _save("resume.json", d)
+
+
+# Shown under the YouTube history so there is always something to try (checked with yt-dlp: 3840x1920 = 2:1
+# equirectangular, tagged "360 video").
+YOUTUBE_EXAMPLES = [
+    ("例: Lions 360° | National Geographic", "https://www.youtube.com/watch?v=sPyAQQklc1s"),
+]
 
 
 def load_history():

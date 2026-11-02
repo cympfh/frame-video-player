@@ -376,6 +376,9 @@ class App:
             hist = media.load_history()
             self.panel.items = [media.Item("ythist", h.get("title") or h["url"], "yt:" + h["url"], h["url"])
                                 for h in hist]
+            seen = {h["url"] for h in hist}
+            self.panel.items += [media.Item("ythist", t, "yt:" + u, u) for t, u in media.YOUTUBE_EXAMPLES
+                                 if u not in seen]
             self.say("YouTube の履歴: %d 件" % len(hist) if hist else
                      "PC で動画の URL をコピーして、トレイの「コピーした動画の URL を Frame で再生する」を選んでください")
 
@@ -444,6 +447,9 @@ class App:
         self.play_at(pos)
         self.place()
         self.say("再生中: %s%s" % (it.title, ("(%s から)" % fmt_time(pos)) if pos else ""))
+        if media.too_heavy(it):
+            self.say("%dx%d の動画は Frame には重すぎます。映像が出るまで時間がかかり、音より遅れます。4K 以下の動画を使ってください"
+                     % (it.width, it.height), True)
 
     def play_at(self, pos):
         if self.pb:

@@ -100,5 +100,67 @@ class Urls(unittest.TestCase):
         self.assertEqual((it.title, it.video, it.audio), ("Title", "https://v.example/1", "https://a.example/2"))
 
 
+
+class HeavyVideo(unittest.TestCase):
+    def test_too_heavy(self):
+        it = m.Item("pc", "a", "k", "u")
+        it.width, it.height = 7680, 3840
+        self.assertTrue(m.too_heavy(it))
+        it.width, it.height = 3840, 2160
+        self.assertFalse(m.too_heavy(it))
+
+    def test_clock_restart(self):
+        t = [10.0]
+        c = m.Clock(lambda: t[0])
+        t[0] = 15.0
+        c.restart()
+        t[0] = 16.0
+        self.assertAlmostEqual(c.now(), 1.0)
+        c.pause()
+        t[0] = 20.0
+        c.restart()
+        self.assertAlmostEqual(c.now(), 0.0)
+        c.resume()
+        t[0] = 21.0
+        self.assertAlmostEqual(c.now(), 1.0)
+
+    def test_audio_waits_for_first_frame(self):
+        import threading
+        pb = m.Playback.__new__(m.Playback)
+        pb.lock, pb.running = threading.Lock(), threading.Event()
+        pb.running.set()
+        pb.stopped, pb.started, pb.aproc, pb.acmd = False, False, None, ["ffmpeg", "audio"]
+        pb.start_pos, pb.t_open = 12.0, 0.0
+        pb.clock = m.Clock()
+        self.assertEqual(pb.position(), 12.0)
+        started = []
+
+        class P:
+            pid, stderr = 1, []
+
+            def poll(self):
+                return None
+        orig = m.subprocess.Popen
+        m.subprocess.Popen = lambda cmd, **k: started.append(cmd) or P()
+        try:
+            pb._first_frame()
+        finally:
+            m.subprocess.Popen = orig
+        self.assertEqual(started, [["ffmpeg", "audio"]])
+        self.assertTrue(pb.started)
+        pb2 = m.Playback.__new__(m.Playback)
+        pb2.__dict__.update(pb.__dict__)
+        pb2.stopped, pb2.aproc = True, None
+        pb2._first_frame()
+        self.assertIsNone(pb2.aproc)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class Examples(unittest.TestCase):
+    def test_360_example(self):
+        t, u = m.YOUTUBE_EXAMPLES[0]
+        self.assertTrue(u.startswith("https://www.youtube.com/watch?v="))
+        self.assertEqual(m.detect_projection(t, {}), "360")
