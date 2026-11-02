@@ -119,6 +119,8 @@ def cube_matrices(pose, yaw=0.0):
 class Panel:
     def __init__(self):
         self.tab = "frame"
+        self.pc_dir = ""        # PC folder shown in the PC tab ('' = drives)
+        self.pc_recent = []     # recent PC folders, newest first
         self.items = []
         self.scroll = 0.0  # in rows; fractional with smooth laser scrolling
         self.status = ""
@@ -151,10 +153,25 @@ class Panel:
             btn("yt:recv", 30, top, 400, 52, "PC から URL を受け取る", size=24)
             btn("reload", 445, top, 200, 52, "履歴を見る", size=24)
             top += 62
+        elif self.tab == "pc":
+            btn("pc:top", 30, top, 200, 48, "ドライブ一覧", size=24)
+            btn("pc:recent", 245, top, 200, 48, "最近のフォルダ", size=24)
+            where = self.pc_dir or "ドライブとビデオフォルダ"
+            while cv.text_width(where, 22) > 450 and len(where) > 4:
+                where = "…" + where[2:]
+            cv.text(where, 460, top + 32, 22, "#94a3b8")
+            top += 56
+            x = 30
+            for i, p in enumerate(self.pc_recent[:4]):
+                label = media.folder_name(p)
+                while cv.text_width(label, 22) > 230 and len(label) > 3:
+                    label = label[:-2] + "…"
+                btn("pcrecent:%d" % i, x, top, 250, 48, label, on=p == self.pc_dir, size=22)
+                x += 260
+            top += 56
         else:
             btn("reload", 30, top, 220, 52, "一覧を読み直す", size=24)
-            where = {"frame": "Frame の ~/Videos", "pc": "PC の「ビデオ」フォルダ"}[self.tab]
-            cv.text(where, 270, top + 35, 22, "#94a3b8")
+            cv.text("Frame の ~/Videos", 270, top + 35, 22, "#94a3b8")
             top += 62
         rows = self.rows()
         rh = 46
@@ -239,7 +256,7 @@ class Panel:
         return cv
 
     def rows(self):
-        return ROWS - 1
+        return ROWS - 2 if self.tab == "pc" else ROWS - 1
 
     def scroll_by(self, rows):
         old = self.scroll
@@ -349,19 +366,8 @@ class App:
             self.panel.items = media.list_local()
             self.say("Frame の動画: %d 件" % len(self.panel.items))
         elif tab == "pc":
-            self.say("PC の一覧を読んでいます…")
-
-            def done(r, e):
-                if e:
-                    self.say("PC の一覧を読めません: %s" % media.redact(e), True)
-                    return
-                items, url = r
-                if self.panel.tab == "pc":
-                    self.panel.items = items
-                self.say("PC の動画: %d 件" % len(items))
-                if url:
-                    self.open_youtube(url)
-            self.run_job(media.list_pc, done)
+            self.panel.pc_recent = media.load_pc_folders()
+            self.open_pc_dir(self.panel.pc_dir)
         else:
             hist = media.load_history()
             self.panel.items = [media.Item("ythist", h.get("title") or h["url"], "yt:" + h["url"], h["url"])
@@ -371,6 +377,32 @@ class App:
                                  if u not in seen]
             self.say("YouTube の履歴: %d 件" % len(hist) if hist else
                      "PC で動画の URL をコピーして、トレイの「コピーした動画の URL を Frame で再生する」を選んでください")
+
+    def open_pc_dir(self, path):
+        self.say("PC のフォルダを読んでいます…")
+
+        def done(r, e):
+            if e:
+                self.say("PC のフォルダを読めません: %s" % media.redact(e), True)
+                return
+            items, url, real = r
+            if self.panel.tab == "pc":
+                self.panel.items, self.panel.scroll, self.panel.pc_dir = items, 0, real
+                if real:
+                    self.panel.pc_recent = media.add_pc_folder(real)
+                self.dirty = True
+            n = len([x for x in items if x.kind == "pc"])
+            self.say("%s: 動画 %d 件" % (real or "PC", n))
+            if url:
+                self.open_youtube(url)
+        self.run_job(lambda: media.list_pc_dir(path), done)
+
+    def show_pc_recent(self):
+        self.panel.pc_recent = media.load_pc_folders()
+        self.panel.items = [media.dir_item("[最近]  " + p, p) for p in self.panel.pc_recent]
+        self.panel.scroll = 0
+        self.dirty = True
+        self.say("最近のフォルダ: %d 件" % len(self.panel.items) if self.panel.items else "まだフォルダを開いていません")
 
     def receive_url(self):
         self.say("PC に URL を聞いています…")
@@ -413,6 +445,9 @@ class App:
         it = self.panel.items[i]
         if it.kind == "ythist":
             self.open_youtube(it.video)
+            return
+        if it.kind == "pcdir":
+            self.open_pc_dir(it.path)
             return
         self.say("開いています: %s" % it.title)
 
@@ -608,7 +643,10 @@ class App:
             base, token, url = r
             if url:
                 self.held_url = url  # the tray hands a URL out once: keep it for 「PC から URL を受け取る」
-            it.video = it.audio = media.pc_url(base, token, it.title)
+            if getattr(it, "path", None):
+                it.video = it.audio = media.pc_file_url(base, token, it.path)
+            else:
+                it.video = it.audio = media.pc_url(base, token, it.title)
             self.play_at(pos)
             self.say("再生中: %s" % it.title)
         self.run_job(media.pc_video, done)
@@ -627,6 +665,14 @@ class App:
         s = self.settings
         if key.startswith("tab:"):
             self.load_tab(key[4:])
+        elif key == "pc:top":
+            self.open_pc_dir("")
+        elif key == "pc:recent":
+            self.show_pc_recent()
+        elif key.startswith("pcrecent:"):
+            i = int(key[9:])
+            if i < len(self.panel.pc_recent):
+                self.open_pc_dir(self.panel.pc_recent[i])
         elif key == "reload":
             self.load_tab(self.panel.tab)
         elif key == "yt:recv":
