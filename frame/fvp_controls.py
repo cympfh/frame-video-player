@@ -114,6 +114,20 @@ def dpad_axis(back, fwd):
     return (1.0 if fwd else 0.0) - (1.0 if back else 0.0)
 
 
+def cancel_opposites(states, pairs=(("seek_back", "seek_fwd"),)):
+    """Both directions of an opposite pair pressed at once can not be a real press: it is the
+    dashboard open/close artifact (SteamVR reports bound actions as held, sometimes stuck for
+    seconds). Normalizing it to "not pressed" keeps the gate unlatched, so a real single-button
+    press still passes while the artifact state is stuck. Returns (states, suppressed_pairs)."""
+    out = dict(states)
+    suppressed = []
+    for a, b in pairs:
+        if out.get(a) and out.get(b):
+            out[a] = out[b] = False
+            suppressed.append((a, b))
+    return out, suppressed
+
+
 class ButtonGate:
     """Filters the boolean actions (seek_back, seek_fwd, play_pause, ...) before they can act.
 

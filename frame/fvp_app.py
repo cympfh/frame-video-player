@@ -22,9 +22,9 @@ import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
 import fvp_openvr as vr
-from fvp_controls import (TURN_STEP, ButtonGate, Edge, SeekRepeater, dpad_axis, input_priority,
-                          overlap_alpha, resolve_tap, scroll_clamp, scroll_from_smooth,
-                          scroll_from_stick, wrap_deg, yaw_step)  # noqa: E402
+from fvp_controls import (TURN_STEP, ButtonGate, Edge, SeekRepeater, cancel_opposites, dpad_axis,
+                          input_priority, overlap_alpha, resolve_tap, scroll_clamp,
+                          scroll_from_smooth, scroll_from_stick, wrap_deg, yaw_step)  # noqa: E402
 
 log = logging.getLogger("fvp")
 KEY = "cympfh.frame-video-player"
@@ -363,6 +363,7 @@ class App:
         self.edges = {n: Edge() for n in BUTTON_ACTIONS}
         self.gate = ButtonGate(BUTTON_ACTIONS)
         self.last_scroll_ev = 0.0
+        self.last_suppressed = []
         self.input = None
         self.last_raw = None
         try:
@@ -657,6 +658,12 @@ class App:
             if self.panel.scroll_by(scroll_from_stick(ry, dt)):
                 self.dirty = True
         # bound buttons: only while the dashboard has been closed for a moment, never on its open/close
+        st, suppressed = cancel_opposites(st)
+        if suppressed != self.last_suppressed:
+            if suppressed:
+                log.info("action artifact suppressed: %s (opposite pair pressed; dashboard transition)",
+                         ", ".join("%s+%s" % p for p in suppressed))
+            self.last_suppressed = suppressed
         g = self.gate.feed(st, dash_visible, now)
         step = self.dpad_seek.feed(dpad_axis(g["seek_back"], g["seek_fwd"]), now)
         if step:

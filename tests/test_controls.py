@@ -193,6 +193,32 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.run_seq(seq), 0)
 
 
+class Artifact(unittest.TestCase):
+    def test_opposite_pair_is_not_a_real_press(self):
+        st, sup = c.cancel_opposites({"seek_back": True, "seek_fwd": True, "play_pause": True})
+        self.assertFalse(st["seek_back"])
+        self.assertFalse(st["seek_fwd"])
+        self.assertTrue(st["play_pause"])  # the third action survives
+        self.assertEqual(sup, [("seek_back", "seek_fwd")])
+
+    def test_single_direction_untouched(self):
+        st, sup = c.cancel_opposites({"seek_back": True, "seek_fwd": False})
+        self.assertTrue(st["seek_back"])
+        self.assertEqual(sup, [])
+
+    def test_stuck_artifact_does_not_block_real_press(self):
+        """Frame 19:30 log: seek_back+seek_fwd stuck True for 13 s (artifact). With the pair
+        cancelled, a real play_pause press during the stuck period still passes the gate."""
+        g, e = c.ButtonGate(a.BUTTON_ACTIONS), c.Edge()
+        stuck = {"seek_back": True, "seek_fwd": True}
+        hits = 0
+        for raw, dash, t in [({}, True, 0.0), (stuck, False, 1.0), (stuck, False, 2.0),
+                             (dict(stuck, play_pause=True), False, 3.0), (stuck, False, 3.5)]:
+            st, _ = c.cancel_opposites(raw)
+            hits += e.feed(g.feed(st, dash, t)["play_pause"])
+        self.assertEqual(hits, 1)
+
+
 class Priority(unittest.TestCase):
     def test_global_only_while_loaded_and_dashboard_closed(self):
         G = 0x01000000
