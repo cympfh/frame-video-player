@@ -22,7 +22,7 @@ import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
 import fvp_openvr as vr
-from fvp_controls import (TURN_STEP, resolve_tap, scroll_clamp, scroll_from_smooth,
+from fvp_controls import (TURN_STEP, overlap_alpha, resolve_tap, scroll_clamp, scroll_from_smooth,
                           wrap_deg)  # noqa: E402
 
 log = logging.getLogger("fvp")
@@ -331,6 +331,7 @@ class App:
         self.jobs = queue.Queue()
         self.dirty = True
         self.pose = None
+        self.alpha_state = None  # last overlay alpha pushed to SteamVR (None = not set yet)
         self.vtex = None
         self.vsize = (0, 0)
         self.last_save = 0.0
@@ -592,6 +593,18 @@ class App:
         if self.osd_until and time.monotonic() > self.osd_until:
             self.osd_until = 0.0
             self.ov.hide(self.osd)
+
+    def pump_alpha(self, dash):
+        """While the dashboard is open over a video, the panel and the video both go translucent
+        (MENU_ALPHA) so neither hides the other. Only pushed to SteamVR when the value changes."""
+        if not self.ov.has_alpha:
+            return
+        a = overlap_alpha(self.item is not None, dash)
+        if a == self.alpha_state:
+            return
+        self.alpha_state = a
+        for h in [self.main, self.screen] + self.faces:
+            self.ov.set_alpha(h, a)
 
     def visible_video_overlays(self):
         if self.item is None:
@@ -999,6 +1012,7 @@ def main():
                         app.dirty = True
             dash = ov.dashboard_visible()
             app.pump_osd()
+            app.pump_alpha(dash)
             for line in ctl.poll():
                 try:
                     handle_command(app, line, test)

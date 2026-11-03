@@ -68,6 +68,18 @@ class Taps(unittest.TestCase):
         self.assertEqual(c.resolve_tap(None, ("pause", 1, 1)), "pause")
 
 
+class OverlapAlpha(unittest.TestCase):
+    def test_translucent_only_while_menu_overlaps_video(self):
+        self.assertEqual(c.overlap_alpha(True, True), c.MENU_ALPHA)
+        self.assertEqual(c.overlap_alpha(True, False), 1.0)   # menu closed: full video
+        self.assertEqual(c.overlap_alpha(False, True), 1.0)   # nothing playing: full menu
+        self.assertEqual(c.overlap_alpha(False, False), 1.0)
+
+    def test_menu_alpha_is_in_the_70_to_80_percent_range(self):
+        self.assertGreaterEqual(c.MENU_ALPHA, 0.7)
+        self.assertLessEqual(c.MENU_ALPHA, 0.8)
+
+
 
 class LaserOnly(unittest.TestCase):
     SRC = os.path.join(os.path.dirname(__file__), "..", "frame")
