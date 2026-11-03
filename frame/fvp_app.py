@@ -22,11 +22,15 @@ import fvp_cairo as cairo  # noqa: E402
 import fvp_gl  # noqa: E402
 import fvp_media as media  # noqa: E402
 import fvp_openvr as vr
-from fvp_controls import (TURN_STEP, overlap_alpha, resolve_tap, scroll_clamp, scroll_from_smooth,
-                          wrap_deg)  # noqa: E402
+from fvp_controls import (TURN_STEP, ButtonGate, Edge, SeekRepeater, dpad_axis, input_priority,
+                          overlap_alpha, resolve_tap, scroll_clamp, scroll_from_smooth,
+                          scroll_from_stick, wrap_deg, yaw_step)  # noqa: E402
 
 log = logging.getLogger("fvp")
 KEY = "cympfh.frame-video-player"
+APP_KEY = KEY  # SteamVR app key (binding settings), same string as the overlay key
+ANALOG_ACTIONS = ("turn", "scroll")
+BUTTON_ACTIONS = ("play_pause", "seek_back", "seek_fwd", "next", "stop", "volume_up", "volume_down", "recenter")
 HERE = os.path.dirname(os.path.realpath(__file__))
 OSD_W, OSD_H = 600, 100
 NAME = "動画プレイヤー"
@@ -355,6 +359,19 @@ class App:
         self.otex = ctx.new_texture(OSD_W, OSD_H)
         for h in [self.screen] + self.faces + [self.osd]:
             ov.hide(h)
+        self.dpad_seek = SeekRepeater()
+        self.edges = {n: Edge() for n in BUTTON_ACTIONS}
+        self.gate = ButtonGate(BUTTON_ACTIONS)
+        self.last_scroll_ev = 0.0
+        self.input = None
+        self.last_raw = None
+        try:
+            vr.register_app(ov, APP_KEY, os.path.join(HERE, "input/actions.json"), log)
+            self.input = vr.Input(ov, os.path.join(HERE, "input/actions.json"), "/actions/fvp",
+                                  ANALOG_ACTIONS, BUTTON_ACTIONS)
+            log.info("SteamVR Input: %s", self.input.version)
+        except Exception as e:  # the panel still works without controller bindings
+            log.warning("SteamVR Input unavailable: %s", e)
         self.load_tab("frame")
 
     # ---- helpers
@@ -606,6 +623,80 @@ class App:
         for h in [self.main, self.screen] + self.faces:
             self.ov.set_alpha(h, a)
 
+    def stick_priority(self, dash_visible):
+        # Overlay apps get NO controller input while the dashboard is closed (a scene app / home has focus):
+        # seen on the Frame 16:29-16:30, action states froze and only changed when the dashboard opened or
+        # closed. Global overlay priority fixes that, but SteamVR only honours it with
+        # /settings/steamvr/globalActionSetPriority on (Developer: "Enable global input from overlays").
+        # Ask for it whenever something is loaded and the dashboard is closed; with the dashboard open use 0
+        # so the dashboard keeps its own input.
+        return input_priority(self.item is not None, dash_visible, vr.ACTION_SET_OVERLAY_GLOBAL_PRIORITY)
+
+    def pump_input(self, dt, dash_visible):
+        """Bound controller buttons/sticks via SteamVR Input; the action set is active only while playing.
+
+        Buttons are meant for watching with the menu closed: ButtonGate blocks them while the dashboard
+        is open and around its open/close. The sticks (list scroll, 360 turn) work in either state."""
+        if self.input is None or self.item is None or self.settings_override.get("hidden"):
+            return
+        st = self.input.update(self.stick_priority(dash_visible))
+        if st is None:
+            return
+        now = time.monotonic()
+        raw = tuple(self.input.raw.get(n) for n in BUTTON_ACTIONS)
+        if raw != self.last_raw:  # (active, pressed) per action; to debug bindings from the log
+            log.info("action raw %s dash=%s", " ".join("%s=%s" % x for x in zip(BUTTON_ACTIONS, raw)), dash_visible)
+            self.last_raw = raw
+        rx, ry = st["turn"][0], st["scroll"][1]
+        if self.mode != "flat":
+            d = yaw_step(rx, dt, self.settings.get("turn_speed", 90.0))
+            if d:
+                self.turn_view(d)
+        if dash_visible and now - self.last_scroll_ev > 0.5:
+            # the dashboard sends scroll events only while the laser points at the panel; fill in otherwise
+            if self.panel.scroll_by(scroll_from_stick(ry, dt)):
+                self.dirty = True
+        # bound buttons: only while the dashboard has been closed for a moment, never on its open/close
+        g = self.gate.feed(st, dash_visible, now)
+        step = self.dpad_seek.feed(dpad_axis(g["seek_back"], g["seek_fwd"]), now)
+        if step:
+            t0 = time.monotonic()
+            target = max(0.0, self.position() + step)
+            if self.item.duration:
+                target = min(target, self.item.duration - 1)
+            self.seek(target)
+            self.show_osd("%s%d秒 → %s" % ("+" if step > 0 else "−", abs(step), fmt_time(target)))
+            log.info("action seek %+ds -> %s (%.0f ms)", step, fmt_time(target), (time.monotonic() - t0) * 1000)
+        if self.edges["play_pause"].feed(g["play_pause"]):
+            t0 = time.monotonic()
+            self.toggle_pause("action play_pause")
+            self.show_osd("一時停止" if self.paused else "再生")
+            log.info("action pause toggle -> %s (%.0f ms)", "paused" if self.paused else "playing",
+                     (time.monotonic() - t0) * 1000)
+        if self.edges["next"].feed(g["next"]):
+            self.next_item()
+            self.show_osd("次の動画")
+        if self.edges["stop"].feed(g["stop"]):
+            self.stop_all()
+            self.show_osd("停止")
+            self.say("停止しました")
+        if self.edges["volume_up"].feed(g["volume_up"]):
+            self.change_volume(0.1)
+        if self.edges["volume_down"].feed(g["volume_down"]):
+            self.change_volume(-0.1)
+        if self.edges["recenter"].feed(g["recenter"]):
+            self.yaw = 0.0
+            self.place()
+            self.show_osd("正面へ")
+
+    def change_volume(self, d, osd=True):
+        s = self.settings
+        s["volume"] = round(min(2.0, max(0.0, s["volume"] + d)), 2)
+        media.save_settings(s)
+        self.restart_same()
+        if osd:
+            self.show_osd("音量 %d%%" % round(s["volume"] * 100))
+
     def visible_video_overlays(self):
         if self.item is None:
             return []
@@ -740,8 +831,7 @@ class App:
             self.stop_all()
             self.say("停止しました")
         elif key in ("vol:-", "vol:+"):
-            s["volume"] = round(min(2.0, max(0.0, s["volume"] + (0.1 if key == "vol:+" else -0.1))), 2)
-            self.restart_same()
+            self.change_volume(0.1 if key == "vol:+" else -0.1, osd=False)
         elif key == "mode" and self.item:
             self.mode = {"flat": "360", "360": "180", "180": "flat"}[self.mode]
             self.restart_same()
@@ -972,6 +1062,7 @@ def main():
                     stop["flag"] = True
                 elif t in (vr.EV_SCROLL_SMOOTH, vr.EV_SCROLL_DISCRETE):
                     # VREvent_Scroll_t xdelta/ydelta share the place of the mouse x/y
+                    app.last_scroll_ev = time.monotonic()
                     rows = scroll_from_smooth(ev.y) if t == vr.EV_SCROLL_SMOOTH else -ev.y * 2
                     if app.settings.get("scroll_invert"):
                         rows = -rows
@@ -1011,6 +1102,11 @@ def main():
                         app.panel.hover = None
                         app.dirty = True
             dash = ov.dashboard_visible()
+            try:
+                app.pump_input(dt, dash)
+            except Exception:
+                log.exception("controller input failed")
+                app.input = None
             app.pump_osd()
             app.pump_alpha(dash)
             for line in ctl.poll():

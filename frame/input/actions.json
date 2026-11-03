@@ -1,0 +1,81 @@
+{
+  "default_bindings": [],
+  "actions": [
+    {
+      "name": "/actions/fvp/in/play_pause",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/seek_back",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/seek_fwd",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/next",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/stop",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/volume_up",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/volume_down",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/recenter",
+      "type": "boolean"
+    },
+    {
+      "name": "/actions/fvp/in/scroll",
+      "type": "vector2"
+    },
+    {
+      "name": "/actions/fvp/in/turn",
+      "type": "vector2"
+    }
+  ],
+  "action_sets": [
+    {
+      "name": "/actions/fvp",
+      "usage": "single"
+    }
+  ],
+  "localization": [
+    {
+      "language_tag": "en_US",
+      "/actions/fvp": "Video player",
+      "/actions/fvp/in/play_pause": "Play / pause",
+      "/actions/fvp/in/seek_back": "Seek back",
+      "/actions/fvp/in/seek_fwd": "Seek forward",
+      "/actions/fvp/in/next": "Next video",
+      "/actions/fvp/in/stop": "Stop",
+      "/actions/fvp/in/volume_up": "Volume up",
+      "/actions/fvp/in/volume_down": "Volume down",
+      "/actions/fvp/in/recenter": "Recenter view",
+      "/actions/fvp/in/scroll": "Scroll",
+      "/actions/fvp/in/turn": "Turn view"
+    },
+    {
+      "language_tag": "ja_JP",
+      "/actions/fvp": "動画プレイヤー",
+      "/actions/fvp/in/play_pause": "再生・一時停止",
+      "/actions/fvp/in/seek_back": "シーク戻る",
+      "/actions/fvp/in/seek_fwd": "シーク進む",
+      "/actions/fvp/in/next": "次の動画",
+      "/actions/fvp/in/stop": "停止",
+      "/actions/fvp/in/volume_up": "音量を上げる",
+      "/actions/fvp/in/volume_down": "音量を下げる",
+      "/actions/fvp/in/recenter": "正面へ",
+      "/actions/fvp/in/scroll": "スクロール",
+      "/actions/fvp/in/turn": "視点回転"
+    }
+  ]
+}

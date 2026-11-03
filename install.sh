@@ -19,9 +19,10 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-mkdir -p "$opt/bin" "$opt/assets" "$udir" "$HOME/.local/bin" "$HOME/Videos"
+mkdir -p "$opt/bin" "$opt/assets" "$opt/input" "$udir" "$HOME/.local/bin" "$HOME/Videos"
 cp "$src"/frame/*.py "$src/frame/fvp_launcher.c" "$opt/"
 cp "$src"/frame/assets/* "$opt/assets/"
+cp "$src"/frame/input/*.json "$opt/input/"
 # python3 を自分の名前で動かす小さなプログラム(SteamVR に、ほかの python3 のアプリと別のアプリとして見せるため)
 gcc -O2 $(python3-config --includes) "$opt/fvp_launcher.c" -lpython3.12 -o "$opt/$name.new"
 mv "$opt/$name.new" "$opt/$name"
