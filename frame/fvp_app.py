@@ -77,10 +77,42 @@ def head_frame(pose):
     return pos, f, r
 
 
+GAZE_PITCH = 0.5  # |sin(pitch)| at or above this -> the flat screen goes in front of the eyes (lying down)
+
+
 def screen_matrix(pose, distance):
+    """Flat screen placement. Level gaze: vertical screen on the floor-plane forward (unchanged).
+    Steep gaze (looking up or down, e.g. lying down): right in front of the eyes, facing the head."""
+    if pose is not None:
+        f3 = _norm([-pose[2], -pose[6], -pose[10]])
+        if abs(f3[1]) >= GAZE_PITCH:
+            return gaze_matrix(pose, f3, distance)
     pos, f, r = head_frame(pose)
     t = [pos[i] + f[i] * distance for i in range(3)]
     return _mat(r, [0, 1, 0], [-f[0], -f[1], -f[2]], t)
+
+
+def gaze_matrix(pose, f3, distance):
+    """Screen hanging in front of the actual line of sight, tilted to face the head.
+
+    The screen's up is the head's up projected onto the screen plane, so lying on the back
+    (looking straight up) gives a ceiling screen with the top of the picture toward the feet's
+    opposite side -- the head's own "up". If the head's up is parallel to the gaze (rolled head),
+    the head's right is used instead."""
+    pos = [pose[3], pose[7], pose[11]]
+    z = [-f3[0], -f3[1], -f3[2]]  # screen normal, back toward the head
+
+    def perp(v):  # v squared flat against the screen plane
+        d = sum(v[i] * z[i] for i in range(3))
+        return [v[i] - d * z[i] for i in range(3)]
+
+    y = perp([pose[1], pose[5], pose[9]])
+    if sum(c * c for c in y) < 0.01:
+        y = perp([pose[0], pose[4], pose[8]])
+    y = _norm(y)
+    x = [y[1] * z[2] - y[2] * z[1], y[2] * z[0] - y[0] * z[2], y[0] * z[1] - y[1] * z[0]]  # y x z
+    t = [pos[i] + f3[i] * distance for i in range(3)]
+    return _mat(x, y, z, t)
 
 
 def turn(f, r, yaw_deg):
