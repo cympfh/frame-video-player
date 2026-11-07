@@ -23,7 +23,8 @@ mkdir -p "$opt/bin" "$opt/assets" "$udir" "$HOME/.local/bin" "$HOME/Videos"
 cp "$src"/frame/*.py "$src/frame/fvp_launcher.c" "$opt/"
 cp "$src"/frame/assets/* "$opt/assets/"
 # python3 を自分の名前で動かす小さなプログラム(SteamVR に、ほかの python3 のアプリと別のアプリとして見せるため)
-gcc -O2 $(python3-config --includes) "$opt/fvp_launcher.c" -lpython3.12 -o "$opt/$name.new"
+pyver=$(python3 -c 'import sys; print("%d.%d" % (sys.version_info.major, sys.version_info.minor))')
+gcc -O2 $(python3-config --includes) "$opt/fvp_launcher.c" -lpython"$pyver" -o "$opt/$name.new"
 mv "$opt/$name.new" "$opt/$name"
 # YouTube 用の yt-dlp(公式の aarch64 版、1 ファイル)
 if [ ! -x "$opt/bin/yt-dlp" ]; then

@@ -69,11 +69,15 @@ class Taps(unittest.TestCase):
 
 
 class OverlapAlpha(unittest.TestCase):
-    def test_translucent_only_while_menu_overlaps_video(self):
+    def test_translucent_only_while_menu_overlaps_playing_video(self):
         self.assertEqual(c.overlap_alpha(True, True), c.MENU_ALPHA)
         self.assertEqual(c.overlap_alpha(True, False), 1.0)   # menu closed: full video
-        self.assertEqual(c.overlap_alpha(False, True), 1.0)   # nothing playing: full menu
+        self.assertEqual(c.overlap_alpha(False, True), 1.0)   # paused or stopped: opaque
         self.assertEqual(c.overlap_alpha(False, False), 1.0)
+
+    def test_app_treats_paused_as_not_playing_for_alpha(self):
+        s = LaserOnly().src("fvp_app.py")
+        self.assertIn("overlap_alpha(self.item is not None and not self.paused, dash)", s)
 
     def test_menu_alpha_is_in_the_70_to_80_percent_range(self):
         self.assertGreaterEqual(c.MENU_ALPHA, 0.7)

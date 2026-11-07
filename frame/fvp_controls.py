@@ -3,11 +3,12 @@ import math
 
 TURN_STEP = 30.0  # degrees per ◀ / ▶ press on the panel (360 / 180 view)
 
-MENU_ALPHA = 0.75  # panel and video opacity while the dashboard is open during playback
+MENU_ALPHA = 0.75  # panel and video opacity while the dashboard is open and a video is playing
 
 
 def overlap_alpha(playing, dashboard_open):
-    """While the menu is open over a video, both go translucent so neither hides the other."""
+    """While the menu is open over a playing video, both go translucent so neither hides the other.
+    paused and stopped pass playing=False and stay fully opaque."""
     return MENU_ALPHA if (playing and dashboard_open) else 1.0
 
 
