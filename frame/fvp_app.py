@@ -595,11 +595,12 @@ class App:
             self.ov.hide(self.osd)
 
     def pump_alpha(self, dash):
-        """While the dashboard is open over a video, the panel and the video both go translucent
-        (MENU_ALPHA) so neither hides the other. Only pushed to SteamVR when the value changes."""
+        """While the dashboard is open over a playing video, the panel and the video both go
+        translucent (MENU_ALPHA) so neither hides the other. Paused and stopped stay opaque.
+        Only pushed to SteamVR when the value changes."""
         if not self.ov.has_alpha:
             return
-        a = overlap_alpha(self.item is not None, dash)
+        a = overlap_alpha(self.item is not None and not self.paused, dash)
         if a == self.alpha_state:
             return
         self.alpha_state = a
